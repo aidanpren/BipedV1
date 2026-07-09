@@ -12,3 +12,4 @@ teleop_twist_joy_node:
       yaw: 0.4
     enable_button: 7
     enable_turbo_button: 5
+    publish_stamped_twist: true
