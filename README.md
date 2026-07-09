@@ -1,2 +1,2 @@
 # BipedV1
-An open-source balancing biped project. Ran off Raspberry PI using ROS2 Jazzy Jalisco. 
+An open-source balancing biped project. Ran off a Raspberry PI using ROS2 Jazzy Jalisco. 
