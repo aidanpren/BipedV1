@@ -12,8 +12,10 @@ class BalanceController:
         # live-tunable: ros2 param set /balance_controller <name> <value>
         self.node.declare_parameter('k3', 20.0)
         self.node.declare_parameter('k4', 2.0)
-        self.node.declare_parameter('a1', 0.0)     # outer loop starts OFF: bisect from pure PD
-        self.node.declare_parameter('a2', 0.0)
+        # outer-loop signs verified 2026-07-13: positive a1/a2 = saturated-lean
+        # runaway; negative = station hold (with the plus-form law below)
+        self.node.declare_parameter('a1', -0.05)
+        self.node.declare_parameter('a2', -0.1)
         self.node.declare_parameter('k_yaw', 0.0)
         self.node.declare_parameter('max_lean', 0.15)
         self.node.declare_parameter('max_torque', 10.0)
@@ -23,6 +25,8 @@ class BalanceController:
         self.x_ready = False
         self.x = 0.0
         self.v = 0.0
+        self.v_f = 0.0              # low-passed v: slip spikes can't slam the lean target
+        self.upright_since = None   # outer loop engages 1 s after recovery, not mid-tumble
         self.x_home = 0.0
         self.v_ref = 0.0
         self.yaw_ref = 0.0
@@ -58,24 +62,36 @@ class BalanceController:
         max_torque = self.node.get_parameter('max_torque').value
 
         # watchdog: stale cmd_vel → zero refs, keep balancing
-        age = (self.node.get_clock().now() - self.last_cmd_time).nanoseconds * 1e-9
+        now = self.node.get_clock().now()
+        age = (now - self.last_cmd_time).nanoseconds * 1e-9
         v_ref = self.v_ref if age < 0.5 else 0.0
         yaw_ref = self.yaw_ref if age < 0.5 else 0.0
 
         if abs(pitch) > self.cutoff_pitch:
             left = right = 0.0
             self.x_home = self.x    # home follows the robot while it's down
+            self.upright_since = None
         else:
-            # mode: driving vs holding station
+            if self.upright_since is None:      # just recovered: re-anchor, start settle timer
+                self.upright_since = now
+                self.x_home = self.x
+            settled = (now - self.upright_since).nanoseconds * 1e-9 > 1.0
+
+            # mode: driving vs holding station (outer loop only once settled)
             if abs(v_ref) > 0.05:
                 self.x_home = self.x                          # home follows you while driving
-                pitch_target = a2 * (self.v - v_ref)
+                pitch_target = a2 * (self.v_f - v_ref)
             else:
-                pitch_target = a1 * (self.x - self.x_home) + a2 * self.v
+                pitch_target = a1 * (self.x - self.x_home) + a2 * self.v_f
+            if not settled:
+                pitch_target = 0.0
             pitch_target = max(-max_lean, min(max_lean, pitch_target))
 
             # balance (common) + steering (differential)
-            torque = -(k3 * (pitch - pitch_target) + k4 * pitch_rate)
+            # SIGN verified empirically in headless Gazebo (2026-07-13): the
+            # minus-law -(k3*(...)+k4*rate) slams the robot down in <1 s; this
+            # plus-form balances and rejects 0.2 rad disturbances.
+            torque = k3 * (pitch - pitch_target) + k4 * pitch_rate
             t_yaw = k_yaw * (yaw_ref - msg.angular_velocity.z)
             left = torque - t_yaw
             right = torque + t_yaw
@@ -100,6 +116,7 @@ class BalanceController:
             self.x_home = self.x
             self.x_ready = True
         self.v = self.wheel_radius * (msg.velocity[l] + msg.velocity[r]) / 2.0
+        self.v_f = 0.85 * self.v_f + 0.15 * self.v   # ~65 ms low-pass at 100 Hz
 
     def cmd_vel_callback(self, msg):
         self.v_ref = msg.linear.x
