@@ -25,7 +25,8 @@ setup(
     entry_points={
         'console_scripts': [
             'fake_pico = robot_base.fake_pico:main',
-            'imu_monitor = robot_base.imu_monitor:main'
+            'imu_monitor = robot_base.imu_monitor:main',
+            'balance_controller = robot_base.balance_controller:main'
         ],
     },
 )

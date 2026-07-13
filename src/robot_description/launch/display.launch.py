@@ -9,7 +9,7 @@ with open(urdf) as f:
     robot_desc = f.read()
 
 
-def generate_launch_description():
+def generate_launch_description(): 
     return LaunchDescription([
         Node(
             package='robot_state_publisher',
@@ -23,7 +23,7 @@ def generate_launch_description():
         Node(
             package='rviz2',
             executable='rviz2'
-        )
+        ),
     ])
 
     

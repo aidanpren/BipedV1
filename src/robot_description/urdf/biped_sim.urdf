@@ -1,102 +1,106 @@
 <?xml version="1.0"?>
-<!-- Minimal PRIMITIVE model of the wheeled biped for Gazebo physics testing.
-     Boxes + cylinders only - NO CAD meshes. Meshes are a cosmetic swap-in later;
-     physics only needs mass, inertia, collision, and joint axes.
-     All numbers are placeholders - tune to your real robot.
-     Frame convention: x = forward, y = left, z = up. Units: meters, kg, radians. -->
+<!-- Stage-1 PHYSICS model of BipedV1 for Gazebo Harmonic.
+     Simplified to a 2-wheel INVERTED PENDULUM: hips are FIXED, only the wheels
+     move, so the body pitches on the wheel axle. Boxes + cylinders only.
+     Numbers are the REAL robot (measured 2026-07-10); leg mass is an estimate.
+     Frame: x = forward, y = left, z = up. Units: metres, kg, radians.
+     Mass budget (total 8.62 kg): base 4.1 (chassis+battery+2 hip motors),
+     each leg 0.5 (est.), each wheel 1.76 (1.36 bare + 0.396 GIM8108 hub). -->
 <robot name="biped">
 
-  <!-- ================= BASE (chassis) ================= -->
+  <!-- ================= BASE (chassis) =================
+       box 0.286 x 0.210 x 0.137 m, 4.1 kg
+       ixx=m/12(y^2+z^2) iyy=m/12(x^2+z^2) izz=m/12(x^2+y^2) -->
   <link name="base_link">
     <visual>
-      <geometry><box size="0.20 0.25 0.12"/></geometry>
-      <material name="grey"><color rgba="0.3 0.3 0.3 1"/></material>
+      <geometry><box size="0.286 0.210 0.137"/></geometry>
+      <material name="grey"><color rgba="0.3 0.3 0.35 1"/></material>
     </visual>
     <collision>
-      <geometry><box size="0.20 0.25 0.12"/></geometry>
+      <geometry><box size="0.286 0.210 0.137"/></geometry>
     </collision>
     <inertial>
-      <mass value="2.0"/>
-      <!-- box inertia: ixx=m/12(y^2+z^2), iyy=m/12(x^2+z^2), izz=m/12(x^2+y^2) -->
-      <inertia ixx="0.01282" ixy="0" ixz="0" iyy="0.00907" iyz="0" izz="0.01708"/>
+      <mass value="4.1"/>
+      <inertia ixx="0.02148" ixy="0" ixz="0" iyy="0.03436" iyz="0" izz="0.04302"/>
     </inertial>
   </link>
 
-  <!-- ================= LEFT LEG ================= -->
+  <!-- ================= LEFT LEG =================
+       box 0.04 x 0.04 x 0.257 m, 0.5 kg, hangs down from the hip.
+       Centre of the box is 0.257/2 = 0.1285 below the hip. -->
   <link name="left_leg">
     <visual>
-      <origin xyz="0 0 -0.09"/>
-      <geometry><box size="0.04 0.04 0.18"/></geometry>
-      <material name="red"><color rgba="0.8 0.1 0.1 1"/></material>
+      <origin xyz="0 0 -0.1285"/>
+      <geometry><box size="0.04 0.04 0.257"/></geometry>
+      <material name="blue"><color rgba="0.1 0.4 0.8 1"/></material>
     </visual>
     <collision>
-      <origin xyz="0 0 -0.09"/>
-      <geometry><box size="0.04 0.04 0.18"/></geometry>
+      <origin xyz="0 0 -0.1285"/>
+      <geometry><box size="0.04 0.04 0.257"/></geometry>
     </collision>
     <inertial>
-      <origin xyz="0 0 -0.09"/>
-      <mass value="0.4"/>
-      <inertia ixx="0.001133" ixy="0" ixz="0" iyy="0.001133" iyz="0" izz="0.0001067"/>
+      <origin xyz="0 0 -0.1285"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.002819" ixy="0" ixz="0" iyy="0.002819" iyz="0" izz="0.0001333"/>
     </inertial>
   </link>
 
-  <joint name="left_hip_joint" type="revolute">
+  <!-- hips FIXED for the stage-1 inverted pendulum (half the 0.358 m track out
+       to +Y, at the bottom of the body z = -0.137/2 = -0.0685) -->
+  <joint name="left_hip_joint" type="fixed">
     <parent link="base_link"/>
     <child link="left_leg"/>
-    <origin xyz="0 0.1 -0.06"/>          <!-- left side, at base bottom -->
-    <axis xyz="0 1 0"/>                  <!-- pitch: leg swings fore/aft -->
-    <limit lower="-1.0" upper="1.0" effort="20" velocity="5"/>
+    <origin xyz="0 0.179 -0.0685"/>
   </joint>
 
   <!-- ================= RIGHT LEG ================= -->
   <link name="right_leg">
     <visual>
-      <origin xyz="0 0 -0.09"/>
-      <geometry><box size="0.04 0.04 0.18"/></geometry>
-      <material name="red"><color rgba="0.8 0.1 0.1 1"/></material>
+      <origin xyz="0 0 -0.1285"/>
+      <geometry><box size="0.04 0.04 0.257"/></geometry>
+      <material name="blue"><color rgba="0.1 0.4 0.8 1"/></material>
     </visual>
     <collision>
-      <origin xyz="0 0 -0.09"/>
-      <geometry><box size="0.04 0.04 0.18"/></geometry>
+      <origin xyz="0 0 -0.1285"/>
+      <geometry><box size="0.04 0.04 0.257"/></geometry>
     </collision>
     <inertial>
-      <origin xyz="0 0 -0.09"/>
-      <mass value="0.4"/>
-      <inertia ixx="0.001133" ixy="0" ixz="0" iyy="0.001133" iyz="0" izz="0.0001067"/>
+      <origin xyz="0 0 -0.1285"/>
+      <mass value="0.5"/>
+      <inertia ixx="0.002819" ixy="0" ixz="0" iyy="0.002819" iyz="0" izz="0.0001333"/>
     </inertial>
   </link>
 
-  <joint name="right_hip_joint" type="revolute">
+  <joint name="right_hip_joint" type="fixed">
     <parent link="base_link"/>
     <child link="right_leg"/>
-    <origin xyz="0 -0.1 -0.06"/>         <!-- right side -->
-    <axis xyz="0 1 0"/>
-    <limit lower="-1.0" upper="1.0" effort="20" velocity="5"/>
+    <origin xyz="0 -0.179 -0.0685"/>
   </joint>
 
-  <!-- ================= LEFT WHEEL ================= -->
-  <!-- cylinder rotated so its axis lies along Y (the rotation axis) -->
+  <!-- ================= LEFT WHEEL =================
+       cylinder r 0.105, width 0.052, 1.76 kg, axle along Y.
+       iyy=1/2 m r^2 (spin)  ixx=izz=1/12 m(3r^2+h^2) -->
   <link name="left_wheel">
     <visual>
       <origin rpy="1.5708 0 0"/>
-      <geometry><cylinder radius="0.06" length="0.03"/></geometry>
-      <material name="black"><color rgba="0.1 0.1 0.1 1"/></material>
+      <geometry><cylinder radius="0.105" length="0.052"/></geometry>
+      <material name="black"><color rgba="0.05 0.05 0.05 1"/></material>
     </visual>
     <collision>
       <origin rpy="1.5708 0 0"/>
-      <geometry><cylinder radius="0.06" length="0.03"/></geometry>
+      <geometry><cylinder radius="0.105" length="0.052"/></geometry>
     </collision>
     <inertial>
-      <mass value="0.3"/>
-      <!-- cylinder, axis along Y: iyy=1/2 m r^2, ixx=izz=1/12 m(3r^2+h^2) -->
-      <inertia ixx="0.0002925" ixy="0" ixz="0" iyy="0.00054" iyz="0" izz="0.0002925"/>
+      <mass value="1.76"/>
+      <inertia ixx="0.005239" ixy="0" ixz="0" iyy="0.009686" iyz="0" izz="0.005239"/>
     </inertial>
   </link>
 
+  <!-- wheel at the bottom of the 0.257 m leg -->
   <joint name="left_wheel_joint" type="continuous">
     <parent link="left_leg"/>
     <child link="left_wheel"/>
-    <origin xyz="0 0 -0.18"/>            <!-- bottom of the leg -->
+    <origin xyz="0 0 -0.257"/>
     <axis xyz="0 1 0"/>
   </joint>
 
@@ -104,24 +108,68 @@
   <link name="right_wheel">
     <visual>
       <origin rpy="1.5708 0 0"/>
-      <geometry><cylinder radius="0.06" length="0.03"/></geometry>
-      <material name="black"><color rgba="0.1 0.1 0.1 1"/></material>
+      <geometry><cylinder radius="0.105" length="0.052"/></geometry>
+      <material name="black"><color rgba="0.05 0.05 0.05 1"/></material>
     </visual>
     <collision>
       <origin rpy="1.5708 0 0"/>
-      <geometry><cylinder radius="0.06" length="0.03"/></geometry>
+      <geometry><cylinder radius="0.105" length="0.052"/></geometry>
     </collision>
     <inertial>
-      <mass value="0.3"/>
-      <inertia ixx="0.0002925" ixy="0" ixz="0" iyy="0.00054" iyz="0" izz="0.0002925"/>
+      <mass value="1.76"/>
+      <inertia ixx="0.005239" ixy="0" ixz="0" iyy="0.009686" iyz="0" izz="0.005239"/>
     </inertial>
   </link>
 
   <joint name="right_wheel_joint" type="continuous">
     <parent link="right_leg"/>
     <child link="right_wheel"/>
-    <origin xyz="0 0 -0.18"/>
+    <origin xyz="0 0 -0.257"/>
     <axis xyz="0 1 0"/>
   </joint>
+
+  <!-- ================= IMU sensor on the body =================
+       Gazebo computes true orientation + angular velocity + linear accel and
+       publishes on gz topic /imu at 100 Hz; the ros_gz_bridge (in the launch
+       file) republishes it as ROS sensor_msgs/Imu on /imu. Needs the
+       gz-sim-imu-system plugin, which biped_world.sdf enables. -->
+  <gazebo reference="base_link">
+    <sensor name="imu_sensor" type="imu">
+      <always_on>1</always_on>
+      <update_rate>100</update_rate>
+      <topic>imu</topic>
+      <gz_frame_id>base_link</gz_frame_id>
+    </sensor>
+  </gazebo>
+
+  <!-- ================= ros2_control interface =================
+       Declares what each wheel joint exposes: an EFFORT command (torque in)
+       and position/velocity state (encoder out). The <hardware> plugin is the
+       swap point: gz_ros2_control in sim, your Pico CAN driver on real HW. -->
+  <ros2_control name="GazeboSimSystem" type="system">
+    <hardware>
+      <plugin>gz_ros2_control/GazeboSimSystem</plugin>
+    </hardware>
+    <joint name="left_wheel_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+    <joint name="right_wheel_joint">
+      <command_interface name="effort"/>
+      <state_interface name="position"/>
+      <state_interface name="velocity"/>
+    </joint>
+  </ros2_control>
+
+  <!-- Loads a controller_manager inside Gazebo, reading controllers.yaml.
+       The __CONTROLLERS_YAML__ token is replaced with the real installed path
+       by gazebo.launch.py (plain URDF can't do $(find ...) substitution). -->
+  <gazebo>
+    <plugin filename="gz_ros2_control-system"
+            name="gz_ros2_control::GazeboSimROS2ControlPlugin">
+      <parameters>__CONTROLLERS_YAML__</parameters>
+    </plugin>
+  </gazebo>
 
 </robot>

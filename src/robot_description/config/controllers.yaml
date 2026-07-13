@@ -1,0 +1,23 @@
+# ros2_control controller configuration for the Gazebo biped.
+# Loaded by the gz_ros2_control plugin (see biped_sim.urdf), which starts a
+# controller_manager INSIDE Gazebo running on sim time.
+controller_manager:
+  ros__parameters:
+    update_rate: 100  # Hz the controllers tick at
+
+    # A broadcaster: reads the wheel encoder state interfaces and publishes
+    # them on /joint_states (this is your position + velocity LQR states).
+    joint_state_broadcaster:
+      type: joint_state_broadcaster/JointStateBroadcaster
+
+    # The actuator: applies effort (torque) to the two wheels. It subscribes to
+    # /wheel_effort_controller/commands (std_msgs/Float64MultiArray) — your
+    # balance node will publish [left_torque, right_torque] there.
+    wheel_effort_controller:
+      type: effort_controllers/JointGroupEffortController
+
+wheel_effort_controller:
+  ros__parameters:
+    joints:
+      - left_wheel_joint
+      - right_wheel_joint
