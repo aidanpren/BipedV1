@@ -10,7 +10,10 @@ def generate_launch_description():
             package='joy',
             executable='joy_node',
             parameters=[{
-                'device_name': 'Sony Interactive Entertainment Wireless Controller',
+                # NO device_name: joy's name-matching is broken here (fails even
+                # against the exact joy_enumerate_devices string). Default
+                # device_id 0 is unambiguous — SDL only enumerates the pad on
+                # this machine (the js0 accelerometer isn't an SDL device).
                 'autorepeat_rate': 20.0,
             }],
         ),

@@ -1,5 +1,8 @@
 twist_mux:
     ros__parameters:
+      # plain Twist end-to-end (must match teleop's publish_stamped_twist: false
+      # and the balance controller's geometry_msgs/Twist subscription)
+      use_stamped: false
       topics:
         joystick:
           topic : joy_vel

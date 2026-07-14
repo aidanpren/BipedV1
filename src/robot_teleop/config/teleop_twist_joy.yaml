@@ -3,13 +3,14 @@ teleop_twist_joy_node:
     axis_linear:
       x: 1
     scale_linear:
-      x: 0.7
+      x: 2.0
     scale_linear_turbo:
-      x: 1.5
+      x: 3.0
     axis_angular:
       yaw: 0
     scale_angular:
-      yaw: 0.4
+      yaw: 2.0
     enable_button: 7
     enable_turbo_button: 5
-    publish_stamped_twist: true
+    # plain Twist end-to-end: the balance controller subscribes geometry_msgs/Twist
+    publish_stamped_twist: false
