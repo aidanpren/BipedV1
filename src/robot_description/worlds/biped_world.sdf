@@ -31,6 +31,64 @@
       <direction>-0.5 0.1 -0.9</direction>
     </light>
 
+    <!-- ============ balance test course (drive in +x from spawn) ============
+         bumps at x=2.0/2.6 (3 cm cable-bumps vs the 10.5 cm wheel radius),
+         8-degree ramp at x=4 up to a 22 cm plateau, mirrored ramp down. -->
+    <model name="bump_1">
+      <static>true</static>
+      <pose>2.0 0 0 1.5708 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.03</radius><length>1.6</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.03</radius><length>1.6</length></cylinder></geometry>
+          <material><ambient>0.8 0.6 0.1 1</ambient><diffuse>0.8 0.6 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="bump_2">
+      <static>true</static>
+      <pose>2.6 0 0 1.5708 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><cylinder><radius>0.03</radius><length>1.6</length></cylinder></geometry></collision>
+        <visual name="v"><geometry><cylinder><radius>0.03</radius><length>1.6</length></cylinder></geometry>
+          <material><ambient>0.8 0.6 0.1 1</ambient><diffuse>0.8 0.6 0.1 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="ramp_up">
+      <static>true</static>
+      <pose>4.0 0 0.09 0 -0.1396 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.6 1.2 0.04</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>1.6 1.2 0.04</size></box></geometry>
+          <material><ambient>0.3 0.5 0.8 1</ambient><diffuse>0.3 0.5 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="plateau">
+      <static>true</static>
+      <pose>5.55 0 0.11 0 0 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.6 1.2 0.22</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>1.6 1.2 0.22</size></box></geometry>
+          <material><ambient>0.4 0.4 0.45 1</ambient><diffuse>0.4 0.4 0.45 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
+    <model name="ramp_down">
+      <static>true</static>
+      <pose>7.1 0 0.09 0 0.1396 0</pose>
+      <link name="link">
+        <collision name="c"><geometry><box><size>1.6 1.2 0.04</size></box></geometry></collision>
+        <visual name="v"><geometry><box><size>1.6 1.2 0.04</size></box></geometry>
+          <material><ambient>0.3 0.5 0.8 1</ambient><diffuse>0.3 0.5 0.8 1</diffuse></material>
+        </visual>
+      </link>
+    </model>
+
     <model name="ground_plane">
       <static>true</static>
       <link name="link">

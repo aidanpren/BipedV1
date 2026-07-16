@@ -15,7 +15,7 @@ class BalanceController:
         # outer-loop signs verified 2026-07-13: positive a1/a2 = saturated-lean
         # runaway; negative = station hold (with the plus-form law below)
         self.node.declare_parameter('a1', -0.05)
-        self.node.declare_parameter('a2', -0.2)
+        self.node.declare_parameter('a2', -0.15)
         self.node.declare_parameter('k_yaw', 4.0)
         self.node.declare_parameter('max_lean', 0.3)
         self.node.declare_parameter('max_torque', 40.0)
