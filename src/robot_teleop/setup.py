@@ -29,6 +29,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'mode_manager = robot_teleop.mode_manager:main',
         ],
     },
 )

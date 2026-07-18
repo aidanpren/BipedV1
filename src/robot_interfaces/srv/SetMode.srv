@@ -1,0 +1,10 @@
+# Request: which mode to switch the robot into.
+# Use one of the named constants below so callers and logs stay readable.
+string TELEOP=teleop
+string DISABLED=disabled
+string AUTONOMOUS=autonomous
+string mode
+---
+# Response: did the switch happen, and if not, why not.
+bool success
+string message
