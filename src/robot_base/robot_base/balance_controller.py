@@ -1,13 +1,17 @@
 import math
 
 import rclpy
+from rclpy.qos import QoSProfile, DurabilityPolicy
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import Imu, JointState
-from std_msgs.msg import Float64MultiArray
+from std_msgs.msg import Float64MultiArray, String
 
 class BalanceController:
     def __init__(self):
         self.node = rclpy.create_node('balance_controller')
+
+        self.default_mode = 'disabled'
+        self.mode = self.default_mode
 
         # live-tunable: ros2 param set /balance_controller <name> <value>
         self.node.declare_parameter('k3', 20.0)
@@ -43,8 +47,20 @@ class BalanceController:
             JointState, 'joint_states', self.joint_state_callback, 10)
         self.cmd_vel_sub = self.node.create_subscription(
             Twist, 'cmd_vel', self.cmd_vel_callback, 10)
+        latched_qos = QoSProfile(
+            depth=1,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        self.mode_sub = self.node.create_subscription(
+            String, 'mode', self.mode_callback, latched_qos)
 
     def imu_callback(self, msg):
+        if self.mode == 'disabled':
+            self.publisher.publish(Float64MultiArray(data=[0.0, 0.0]))
+            self.x_home = self.x
+            self.upright_since = None
+            return
+        
         q = msg.orientation
         sinp = 2.0 * (q.w * q.y - q.z * q.x)
         sinp = max(-1.0, min(1.0, sinp))   # clamp — floating point can exceed ±1
@@ -122,6 +138,10 @@ class BalanceController:
         self.v_ref = msg.linear.x
         self.yaw_ref = msg.angular.z
         self.last_cmd_time = self.node.get_clock().now()
+
+    def mode_callback(self, msg):
+        self.mode = msg.data
+        self.node.get_logger().info(f'mode {self.mode}')
 
 
 def main(args=None):
