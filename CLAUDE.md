@@ -12,29 +12,45 @@ understanding ROS 2 well enough to design future robots on his own. Shipping a
 working robot is secondary to him learning why things work.
 
 ## Hardware / compute split
-- **RP2040 Pico** (real-time): balance loop, IMU, CAN to the 4 motors via a
-  Waveshare CAN Bus module (SPI, MCP2515-class) — this is the robot's
-  ONBOARD production CAN path. Runs micro-ROS. Subscribes to a velocity
-  setpoint; publishes telemetry (IMU, motor current/voltage, battery). Never
-  depends on the network.
-- **Raspberry Pi 5** (the brain): micro-ROS agent, twist_mux, joystick node,
-  mode_manager, RPLidar, later Nav2/SLAM. Auto-starts on boot via systemd.
+**CHANGED 2026-07-22 — the balance loop moved OFF the Pico onto the Pi.**
+The old plan (Pico runs balance + IMU + CAN via micro-ROS) was dropped so the
+real robot could be coded and validated in simulation first; the Pico path
+can't meaningfully be tested in Gazebo and would be a rewrite in C rather than
+a port. Accepted trade-off: Linux is not hard real-time, so loop jitter is a
+real risk. Fallback if it bites: port the by-then-proven loop to Pico firmware.
+
+- **Raspberry Pi 5** (the brain, and now the controller): the balance loop
+  (`robot_base/balance_controller`), `odrive_bridge` (CAN to the motors),
+  `imu_node`, twist_mux, joystick node, mode_manager, rosbridge + dashboard,
+  RPLidar, later Nav2/SLAM. Auto-starts on boot via systemd.
+- **Motors**: driven by **ODrive** controllers over CAN at **500 kbps** — NOT
+  the MIT/Mini-Cheetah protocol. Torque (effort) mode; gear ratio 8. Frame
+  IDs, enums and the motor-vs-output unit traps are documented in the memory
+  file `odrive-can-protocol`.
+- **RP2040 Pico**: currently UNUSED. Retained as an option for a future
+  real-time port of the balance loop, or as a dedicated sensor board.
+- **BNO085 (BNO08x) IMU**: onboard fusion, gives a quaternion directly.
+  Prefer **UART or SPI** — the BNO08x uses I2C clock stretching, which the
+  Pi's hardware I2C handles badly. Mounting rotation MUST be calibrated
+  (`imu_node`'s `mount_rpy`) before torque is ever enabled.
 - **Ubuntu laptop** (driver station): joystick + dashboard. Fully OPTIONAL —
-  nothing on the robot depends on it.
-- **CANable 2.0** (USB-CAN adapter): BENCH/DEV TOOL ONLY — plugs into a
-  laptop or the Pi over USB (shows up as SocketCAN `can0`) for talking
-  directly to the GIM8108 motors via `candump`/`cansend`/python-can. Used
-  for testing and tuning motors independently of Pico firmware. NOT part
-  of the robot's onboard production CAN path.
+  nothing on the robot depends on it. The dashboard is a web page, so a phone
+  works too.
+- **CANable 2.0** (USB-CAN adapter): was a bench-only tool, but with the loop
+  on the Pi it is now a candidate for the robot's production CAN path. NOTE
+  the fragility: it runs through `slcand`, and a killed daemon or a yanked USB
+  cable leaks a zombie netdev that squats the interface name (see the memory
+  file `slcan-zombie-interface`). A permanent MCP2515-class CAN HAT on the Pi's
+  SPI bus is the more robust production choice — decide before final assembly.
 - **CAN bus wiring note**: exactly two 120Ω termination resistors, one at
   each PHYSICAL END of the bus — not one per device. A single-motor bench
   test (CANable + motor) is a two-node bus and both ends get terminated.
-  On the real robot (Pico + 4 motors daisy-chained), only the two devices
-  at the physical ends are terminated, not all four motors.
+  On the real robot only the two devices at the physical ends are terminated,
+  not every motor.
 
 ## Software goals (what "done" looks like)
 1. **Standalone**: power on and the robot balances and works with zero network
-   dependency. Pico runs on power; Pi auto-launches the stack.
+   dependency. The Pi auto-launches the whole stack on boot.
 2. **Optional driver station**: robot always publishes telemetry and accepts
    cmd_vel. When the laptop appears on the network, DDS discovery connects it
    automatically. When it's gone, the robot doesn't notice.
@@ -47,18 +63,30 @@ working robot is secondary to him learning why things work.
    never hardcoded.
 
 ## Safety invariant (non-negotiable)
-The command-timeout watchdog lives on the Pico. On loss of cmd_vel, it zeros
-translational/rotational velocity BUT KEEPS BALANCING. Never cut motors — that
-drops the robot.
+The command-timeout watchdog lives in `balance_controller` (on the Pi, since
+2026-07-22). On loss of cmd_vel it zeros translational/rotational velocity BUT
+KEEPS BALANCING. Never cut motors on signal loss — that drops the robot.
+
+Three distinct behaviours that must never be merged into one code path:
+1. **Stale cmd_vel** → zero the velocity references, keep balancing.
+2. **DISABLED mode** → deliberately cut torque. Only ever from an EXPLICIT
+   command, never automatically, because it drops the robot.
+3. **Stale wheel-torque commands** (`odrive_bridge`) → coast. This means the
+   controller itself died, so there is nothing left to balance with. Safe on a
+   stand; revisit before the robot runs untethered.
 
 ## Workspace layout
 BipedV1/ is both the git repo and the ROS 2 workspace root. Packages live in
 src/. Build from the root with colcon; never commit build/, install/, or log/.
 - robot_bringup     — launch files + YAML config; single entry point
-- robot_description — URDF/xacro
+                      (sim.launch.py / real.launch.py — identical SHARED block)
+- robot_description — URDF/xacro + Gazebo worlds
 - robot_teleop      — joy, twist_mux, mode_manager
-- robot_base        — micro-ROS bridge to the Pico
+- robot_base        — balance_controller, odrive_bridge, imu_node, odrive_can
+- robot_interfaces  — custom msgs/srvs (SetMode)
+- robot_dashboard   — rosbridge + web dashboard (browser/phone)
 - robot_navigation  — Nav2/SLAM (later)
+- tools/            — non-ROS dev tools: fake_odrive + no-hardware tests
 
 ## Environment
 ROS 2 Jazzy on Ubuntu 24.04 (WSL2 on the dev laptop). Staying on Jazzy —

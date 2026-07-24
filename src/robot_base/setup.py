@@ -15,7 +15,7 @@ setup(
     zip_safe=True,
     maintainer='roshub',
     maintainer_email='aidan.pren14@gmail.com',
-    description='Bridges and interfaces to the Pico w/ fake telemetry for now',
+    description='Balance loop, ODrive CAN bridges (wheels + legs), and IMU node.',
     license='Apache-2.0',
     extras_require={
         'test': [
@@ -24,9 +24,10 @@ setup(
     },
     entry_points={
         'console_scripts': [
-            'fake_pico = robot_base.fake_pico:main',
-            'imu_monitor = robot_base.imu_monitor:main',
-            'balance_controller = robot_base.balance_controller:main'
+            'balance_controller = robot_base.balance_controller:main',
+            'odrive_bridge = robot_base.odrive_bridge:main',
+            'imu_node = robot_base.imu_node:main',
+            'leg_controller = robot_base.leg_controller:main'
         ],
     },
 )
