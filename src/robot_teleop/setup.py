@@ -30,6 +30,7 @@ setup(
     entry_points={
         'console_scripts': [
             'mode_manager = robot_teleop.mode_manager:main',
+            'leg_joy = robot_teleop.leg_joy:main',
         ],
     },
 )

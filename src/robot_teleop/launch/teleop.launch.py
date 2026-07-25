@@ -39,6 +39,12 @@ def generate_launch_description():
                     'twist_mux.yaml')
             ],
             remappings=[('cmd_vel_out', 'cmd_vel')]
-            
+        ),
+        # right-stick -> leg height. Publishes /leg_position_cmd (turns), the
+        # same topic the dashboard slider and the real leg_controller use.
+        Node(
+            package='robot_teleop',
+            executable='leg_joy',
+            output='screen',
         )
     ])
