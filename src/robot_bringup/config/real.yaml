@@ -1,0 +1,111 @@
+# ---------------------------------------------------------------------------
+# REAL ROBOT parameters. Loaded by real.launch.py.
+#
+# Anything marked [SATURDAY] is a PLACEHOLDER that must be measured or
+# confirmed against the physical robot during bring-up (2026-07-25). Do not
+# trust these numbers until you have replaced them.
+#
+# TYPES MATTER: a node declaring a double (20.0) CRASHES if handed a bare int
+# (20). Every value ending in .0 must keep its .0.
+#
+# Compare against sim.yaml — the diff on balance_controller is the record of
+# how far the real robot drifted from the simulated model.
+# ---------------------------------------------------------------------------
+
+balance_controller:
+  ros__parameters:
+    # Starting point = the Gazebo-tuned gains. Expect to retune: the real
+    # robot has different mass distribution, real friction, and IMU noise.
+    k3: 20.0
+    k4: 2.0
+    a1: -0.05
+    a2: -0.15
+    k_yaw: 4.0
+    max_lean: 0.3
+
+    # [SATURDAY] DELIBERATELY LOW for first power-on. Raise only on purpose.
+    #
+    # Cross-check before raising -- the ODrive's CURRENT limit may bind first,
+    # in which case this ceiling is fiction and never actually engages:
+    #     max output torque = current_limit * (8.27 / motor_kv) * gear_ratio
+    # With current_limit 12.0 and the PLACEHOLDER motor_kv 100, that is
+    # ~7.9 Nm -- far below sim's 40.0. Confirm motor_kv from the GIM8108 spec
+    # or measurement, then set this BELOW the computed ceiling so the
+    # controller's own saturation is the thing that binds, not the ODrive's.
+    max_torque: 4.0
+
+odrive_bridge:
+  ros__parameters:
+    can_interface: 'socketcan'
+    can_channel: 'can2'       # [SATURDAY] confirm; slcand naming drifts
+    bitrate: 500000
+
+    # [SATURDAY] GUESSED. Set node IDs ONE BOARD AT A TIME -- an unconfigured
+    # ODrive defaults to node_id 0, so two on the bus both answer to 0 and
+    # collide. Power one, set axis0.config.can.node_id, save_configuration(),
+    # confirm with candump, then the next.
+    left_node_id: 1
+    right_node_id: 2
+
+    gear_ratio: 8.0           # velocity x8, torque /8 -- handled in odrive_can
+
+    # [SATURDAY] Verify OPEN-LOOP, before balance_controller ever runs. A wrong
+    # sign here makes the balance loop ADD energy to a fall instead of catching
+    # it -- it diverges as fast as the motors allow.
+    invert_left: false
+    invert_right: true
+
+    current_limit: 12.0       # A -- also sets the real torque ceiling, see above
+    vel_limit: 20.0           # output rev/s
+    publish_rate: 50.0        # Hz
+    cmd_timeout: 0.5          # s; stale wheel torque -> COAST
+
+leg_controller:
+  ros__parameters:
+    can_interface: 'socketcan'
+    can_channel: 'can2'       # [SATURDAY] same bus as the wheels
+    bitrate: 500000
+
+    left_node_id: 3           # [SATURDAY] guessed, see odrive_bridge note
+    right_node_id: 4          # [SATURDAY]
+
+    gear_ratio: 8.0
+    invert_left: false        # [SATURDAY] verify open-loop
+    invert_right: true        # [SATURDAY]
+
+    current_limit: 12.0
+    vel_limit: 5.0            # output turns/s
+    publish_rate: 50.0
+
+    # [SATURDAY] TRAVEL LIMITS -- measure the real mechanism before enabling.
+    # These clamp commanded leg position. Too wide and the legs drive into
+    # their hard stops under position control, which does not give up.
+    pos_min: -0.25
+    pos_max: 0.25
+    home_position: 0.0
+
+    max_speed: 0.15           # output turns/s, ramp rate
+
+    input_mode: 3             # POS_FILTER (see odrive_can.InputMode)
+    idle_on_shutdown: true
+
+    # REMINDER: what actually holds the legs against gravity is
+    # vel_integrator_gain, which lives in ODrive config (odrivetool), NOT here.
+    # Damping only reduces sag; the integrator carries the weight.
+
+imu_node:
+  ros__parameters:
+    driver: 'uart'            # uart | spi | i2c | fake
+                              # I2C is unreliable on a Pi (clock stretching).
+    port: '/dev/serial0'
+    baud: 3000000
+    i2c_address: 0x4A
+    frame_id: 'imu_link'
+    publish_rate: 100.0
+
+    # [SATURDAY] Rotation taking SENSOR axes -> ROBOT axes, as [r, p, y] rad.
+    # Identity is almost certainly WRONG once the board is bolted in. Verify on
+    # a bench BEFORE torque is ever enabled: a bad mount rotation feeds the
+    # balance loop a mis-signed pitch, which fails the same way a wrong
+    # invert_* does.
+    mount_rpy: [0.0, 0.0, 0.0]

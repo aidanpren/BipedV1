@@ -1,0 +1,33 @@
+# ---------------------------------------------------------------------------
+# SIM parameters. Loaded by sim.launch.py.
+#
+# Keep this file and real.yaml structurally identical for the nodes they share,
+# so `diff sim.yaml real.yaml` shows exactly how the real robot differs from
+# the model. That diff is data — it tells you where your sim is wrong.
+#
+# TYPES MATTER: a node that declares a double (20.0) will CRASH if handed a
+# bare int (20). Every value below that ends in .0 must keep its .0.
+#
+# The top-level key is the NODE NAME (create_node('balance_controller')), not
+# the executable name. They match today. If you ever launch a node with
+# name='something_else', this key must change too or the params are silently
+# ignored and the node quietly runs on its hardcoded defaults.
+# ---------------------------------------------------------------------------
+
+balance_controller:
+  ros__parameters:
+    # Inner loop: pitch -> wheel torque. Tuned in Gazebo 2026-07-13.
+    k3: 20.0            # pitch gain
+    k4: 2.0             # pitch-rate (damping) gain
+
+    # Outer loop: position/velocity -> desired lean.
+    # Sign verified 2026-07-13: POSITIVE a1/a2 = saturated-lean runaway,
+    # NEGATIVE = station hold (given the plus-form control law in the node).
+    a1: -0.05           # position -> lean
+    a2: -0.15           # velocity -> lean
+
+    k_yaw: 4.0          # yaw-rate gain (differential wheel torque)
+
+    # Safety saturations.
+    max_lean: 0.3       # rad, cap on the outer loop's lean request
+    max_torque: 40.0    # Nm at the OUTPUT shaft

@@ -92,8 +92,25 @@ def generate_launch_description():
         arguments=['wheel_effort_controller', '--param-file', controllers],
         output='screen',
     )
+    # The legs. Same --param-file requirement and the same robot_description
+    # path workaround applies (see the note above the copy to /tmp).
+    leg_spawner = Node(
+        package='controller_manager', executable='spawner',
+        arguments=['leg_position_controller', '--param-file', controllers],
+        output='screen',
+    )
+
+    # SIM-ONLY parity bridge: maps the single /leg_position_cmd (turns) the
+    # dashboard + real leg_controller use onto this controller's
+    # /leg_position_controller/commands (metres), and republishes leg state
+    # back under the real joint names. Lets one slider drive sim and hardware.
+    sim_leg_bridge = Node(
+        package='robot_description', executable='sim_leg_bridge',
+        output='screen',
+    )
 
     return LaunchDescription([
         gz_plugin_path,  # must be set BEFORE Gazebo starts
-        gz_sim, rsp, spawn, imu_bridge, jsb_spawner, wheel_spawner,
+        gz_sim, rsp, spawn, imu_bridge,
+        jsb_spawner, wheel_spawner, leg_spawner, sim_leg_bridge,
     ])

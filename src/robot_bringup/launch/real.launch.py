@@ -34,31 +34,45 @@ def generate_launch_description():
         'imu_driver', default_value='uart',
         description='BNO085 interface: uart | spi | i2c, or fake to dry-run. '
                     'I2C is unreliable on a Pi (clock stretching).')
-    mount_rpy = DeclareLaunchArgument(
-        'imu_mount_rpy', default_value='[0.0, 0.0, 0.0]',
-        description='Rotation taking SENSOR axes to ROBOT axes. VERIFY ON A '
-                    'BENCH before enabling torque.')
+    # NOTE: mount_rpy is deliberately NOT a launch argument. It is a double
+    # ARRAY, and a launch arg is always a STRING — passing '[0.0, 0.0, 0.0]'
+    # here would fail the node's type check, and because dict overrides beat
+    # the YAML it would clobber the calibrated value on every launch. It is
+    # also a bench-calibration constant, not a per-run toggle. It lives in
+    # config/real.yaml. Edit it there.
+
+    # Every tunable lives here, not in the node source. sim.launch.py loads
+    # config/sim.yaml instead — `diff sim.yaml real.yaml` is the record of how
+    # the real robot differs from the simulated model.
+    params = os.path.join(
+        get_package_share_directory('robot_bringup'), 'config', 'real.yaml')
 
     # ---- HARDWARE LAYER (this is what sim.launch.py does with Gazebo) ------
+    # NOTE the ORDER in each `parameters=` list: the YAML loads first, then the
+    # dict OVERRIDES it. Later entries win. That is what lets a launch arg
+    # (can_channel:=vcan0) beat the file without editing the file — the file
+    # holds the real robot's values, the arg is the dry-run escape hatch.
     odrive = Node(
         package='robot_base', executable='odrive_bridge', output='screen',
-        parameters=[{'can_channel': LaunchConfiguration('can_channel')}],
+        parameters=[params,
+                    {'can_channel': LaunchConfiguration('can_channel')}],
     )
     imu = Node(
         package='robot_base', executable='imu_node', output='screen',
-        parameters=[{'driver': LaunchConfiguration('imu_driver'),
-                     'mount_rpy': LaunchConfiguration('imu_mount_rpy')}],
+        parameters=[params,
+                    {'driver': LaunchConfiguration('imu_driver')}],
     )
     # leg ODrives in POSITION mode. Shares the CAN bus with odrive_bridge —
     # SocketCAN gives each node its own socket on the same interface.
     legs = Node(
         package='robot_base', executable='leg_controller', output='screen',
-        parameters=[{'can_channel': LaunchConfiguration('can_channel')}],
+        parameters=[params,
+                    {'can_channel': LaunchConfiguration('can_channel')}],
     )
 
     # ---- SHARED: byte-for-byte the same nodes sim.launch.py runs -----------
     balance = Node(package='robot_base', executable='balance_controller',
-                   output='screen')
+                   output='screen', parameters=[params])
     mode_manager = Node(package='robot_teleop', executable='mode_manager',
                         output='screen')
     teleop = IncludeLaunchDescription(
@@ -71,7 +85,7 @@ def generate_launch_description():
             'launch', 'dashboard.launch.py')))
 
     return LaunchDescription([
-        can_channel, imu_driver, mount_rpy,
+        can_channel, imu_driver,
         odrive, imu, legs,
         balance, mode_manager, teleop, dashboard,
     ])

@@ -11,12 +11,18 @@ def generate_launch_description():
     """One-command SIM stack: Gazebo + the full robot software.
 
     Grouped below into SIM-ONLY (Gazebo) and SHARED (everything the real robot
-    also runs). When you write real.launch.py later, the SHARED block is what
-    you copy — swap only the SIM-ONLY block for the micro-ROS/Pico bringup.
+    also runs). real.launch.py runs the same SHARED block — only the layer
+    underneath it changes (Gazebo here, ODrive/IMU hardware there).
+
+    Tunables live in config/sim.yaml, NOT in the node source. real.launch.py
+    loads config/real.yaml instead, so both tunings exist at once and
+    `diff sim.yaml real.yaml` shows how the real robot differs from the model.
     """
+    params = os.path.join(
+        get_package_share_directory('robot_bringup'), 'config', 'sim.yaml')
 
     # ---- SIM-ONLY: Gazebo, robot spawn, IMU bridge, ros2_control ----------
-    # On the real robot the Pico provides the IMU + wheel interface instead.
+    # On the real robot odrive_bridge + imu_node provide these interfaces.
     gazebo = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(
             get_package_share_directory('robot_description'),
@@ -29,6 +35,7 @@ def generate_launch_description():
         package='robot_base',
         executable='balance_controller',
         output='screen',
+        parameters=[params],
     )
 
     # mode supervisor (latched /mode + SetMode service + controller interlock)

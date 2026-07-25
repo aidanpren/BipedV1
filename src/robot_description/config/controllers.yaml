@@ -16,8 +16,21 @@ controller_manager:
     wheel_effort_controller:
       type: effort_controllers/JointGroupEffortController
 
+    # The legs. POSITION, not effort — you command where the leg should be.
+    # Subscribes to /leg_position_controller/commands (Float64MultiArray) as
+    # [left, right]. sim_leg_bridge (Piece 3) will translate the single
+    # /leg_position_cmd the dashboard and real leg_controller use into this.
+    leg_position_controller:
+      type: position_controllers/JointGroupPositionController
+
 wheel_effort_controller:
   ros__parameters:
     joints:
       - left_wheel_joint
       - right_wheel_joint
+
+leg_position_controller:
+  ros__parameters:
+    joints:
+      - left_hip_joint
+      - right_hip_joint

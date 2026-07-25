@@ -23,7 +23,7 @@ setup(
     zip_safe=True,
     maintainer='roshub',
     maintainer_email='aidan.pren14@gmail.com',
-    description='TODO: Package description',
+    description='URDF/xacro, Gazebo worlds, and sim-only bridges for BipedV1.',
     license='Apache-2.0',
     extras_require={
         'test': [
@@ -32,6 +32,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'sim_leg_bridge = robot_description.sim_leg_bridge:main',
         ],
     },
 )
