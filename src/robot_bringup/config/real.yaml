@@ -37,15 +37,13 @@ balance_controller:
 odrive_bridge:
   ros__parameters:
     can_interface: 'socketcan'
-    can_channel: 'can2'       # [SATURDAY] confirm; slcand naming drifts
+    can_channel: 'can0'       # slcand names it can0 on the Pi
     bitrate: 500000
 
-    # [SATURDAY] GUESSED. Set node IDs ONE BOARD AT A TIME -- an unconfigured
-    # ODrive defaults to node_id 0, so two on the bus both answer to 0 and
-    # collide. Power one, set axis0.config.can.node_id, save_configuration(),
-    # confirm with candump, then the next.
-    left_node_id: 1
-    right_node_id: 2
+    # CONFIRMED on hardware 2026-07-29 via candump (heartbeat IDs 001/021/041/061).
+    # Scheme: right wheel=0, right hip=1, left wheel=2, left hip=3.
+    left_node_id: 2           # left wheel
+    right_node_id: 0          # right wheel
 
     gear_ratio: 8.0           # velocity x8, torque /8 -- handled in odrive_can
 
@@ -63,11 +61,11 @@ odrive_bridge:
 leg_controller:
   ros__parameters:
     can_interface: 'socketcan'
-    can_channel: 'can2'       # [SATURDAY] same bus as the wheels
+    can_channel: 'can0'       # same bus as the wheels
     bitrate: 500000
 
-    left_node_id: 3           # [SATURDAY] guessed, see odrive_bridge note
-    right_node_id: 4          # [SATURDAY]
+    left_node_id: 3           # left hip  (confirmed on hardware 2026-07-29)
+    right_node_id: 1          # right hip
 
     gear_ratio: 8.0
     invert_left: false        # [SATURDAY] verify open-loop
