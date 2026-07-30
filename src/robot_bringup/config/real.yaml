@@ -71,18 +71,55 @@ leg_controller:
     invert_left: false        # [SATURDAY] verify open-loop
     invert_right: true        # [SATURDAY]
 
-    current_limit: 12.0
+    # [SATURDAY] DELIBERATELY LOW for first powered motion, same doctrine as
+    # balance_controller's max_torque. Under-current on a leg means SAG, not
+    # breakage -- the safe direction to be wrong in. Raise on purpose once the
+    # travel limits and zeroing are confirmed.
+    current_limit: 5.0
     vel_limit: 5.0            # output turns/s
     publish_rate: 50.0
 
     # [SATURDAY] TRAVEL LIMITS -- measure the real mechanism before enabling.
     # These clamp commanded leg position. Too wide and the legs drive into
     # their hard stops under position control, which does not give up.
-    pos_min: -0.25
-    pos_max: 0.25
-    home_position: 0.0
+    #
+    # 0.0 is the RETRACTED hard stop. THREE ceilings apply:
+    #   * 0.1937 turns is the linkage toggle point (sin peaks at 90 deg);
+    #     past it MORE turns means LESS extension and the map inverts.
+    #   * 1/gear_ratio = 0.125 turns is ONE MOTOR TURN. The MA732 is
+    #     single-turn absolute, so travel must fit inside one turn or two leg
+    #     heights alias to the same boot reading and homing becomes mandatory.
+    #   * the DEAD BAND left over after travel is the entire error budget for
+    #     backlash/wind-up/noise when unwrapping the boot reading, and it is
+    #     measured at the MOTOR, before the gearbox. At pos_max 0.12 it is
+    #     0.0025 turns = 7 deg of motor rotation, which is nothing. At 0.10 it
+    #     is 0.0125 turns = 36 deg. leg_controller warns below
+    #     min_unwrap_margin and REFUSES to arm if it goes negative.
+    # ext = 0.462*sin(20.28deg + 360deg*turns) m, so 0.10 turns gives
+    # 0.160 m retracted -> 0.384 m extended (0.224 m of usable lift).
+    #
+    # [SATURDAY] RAISE ONLY AFTER the power-cycle test in HARDWARE_BRINGUP.md
+    # shows what pos_estimate actually does across a reboot. If the fork
+    # firmware persists a MULTI-TURN count, none of the single-turn reasoning
+    # binds and this can go to ~0.19.
+    pos_min: 0.0
+    pos_max: 0.10
+    min_unwrap_margin: 0.01   # output turns; warn below this
+    home_position: 0.0        # start retracted; command up from there
 
     max_speed: 0.15           # output turns/s, ramp rate
+
+    # [SATURDAY] ZEROING. Raw ODrive pos_estimate (OUTPUT turns) with each leg
+    # against its RETRACTED hard stop. Measure ONCE: push the leg onto the
+    # stop, read /leg_states with use_measured_zero false, record the raw
+    # values from the node's warning line, paste them here, flip the flag.
+    # After that the robot never homes again.
+    use_measured_zero: false
+    zero_raw_left: 0.0
+    zero_raw_right: 0.0
+    max_leg_mismatch: 0.03    # output turns; legs disagreeing more -> refuse to arm
+
+    arm_timeout: 3.0          # s to wait for encoder feedback before refusing to arm
 
     input_mode: 3             # POS_FILTER (see odrive_can.InputMode)
     idle_on_shutdown: true

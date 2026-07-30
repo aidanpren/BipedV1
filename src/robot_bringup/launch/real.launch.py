@@ -28,8 +28,11 @@ def generate_launch_description():
     override THEIR defaults.
     """
     can_channel = DeclareLaunchArgument(
-        'can_channel', default_value='can2',
-        description='SocketCAN interface for the ODrives (vcan0 to dry-run).')
+        'can_channel', default_value='can0',
+        description='SocketCAN interface for the ODrives (vcan0 to dry-run). '
+                    'slcand names it can0 on the Pi. NOTE this default is '
+                    'applied as an override BELOW the YAML, so it wins over '
+                    'real.yaml — the two must agree or the file loses.')
     imu_driver = DeclareLaunchArgument(
         'imu_driver', default_value='uart',
         description='BNO085 interface: uart | spi | i2c, or fake to dry-run. '
