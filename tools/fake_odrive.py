@@ -79,6 +79,9 @@ class FakeODrive:
         # what makes "can it hold its weight?" answerable without hardware.
         self.load_torque = 0.0           # Nm at the motor shaft
 
+        # see feedback_frame(): real fw only reports encoder data in CLOSED_LOOP
+        self.closed_loop_feedback_only = True
+
         self.running = True
         self._lock = threading.Lock()
 
@@ -131,6 +134,13 @@ class FakeODrive:
     def feedback_frame(self, cmd):
         with self._lock:
             if cmd == CMD_GET_ENCODER_ESTIMATES:
+                # CONFIRMED on hardware 2026-07-30: this fork reports encoder
+                # estimates as ZEROS unless the axis is in CLOSED_LOOP. Driver
+                # code that reads position before arming gets a convincing
+                # "everything is at the origin", so model it here.
+                if (self.closed_loop_feedback_only
+                        and self.axis_state != AxisState.CLOSED_LOOP_CONTROL):
+                    return struct.pack('<ff', 0.0, 0.0)
                 return struct.pack('<ff', self.pos, self.vel)
             if cmd == CMD_GET_IQ:
                 iq = self.applied_torque / self.kt

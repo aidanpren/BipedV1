@@ -189,6 +189,19 @@ class LegController:
         while we work it out. Encoder estimates come back in IDLE just fine —
         the RTR read does not need closed-loop control.
         """
+        # CONFIRMED on hardware 2026-07-30: this fork only populates the
+        # Get_Encoder_Estimates frame in CLOSED_LOOP. In IDLE it answers with
+        # all zeros, which would look like "both legs at the origin" and is
+        # exactly the wrong answer to seed a ramp with. So arm in TORQUE mode
+        # at ZERO torque first: a leg at zero torque is limp, identical to how
+        # it already sits in IDLE, so this adds no risk — but it makes the
+        # encoder talk. Position mode is entered later by arm(), only after the
+        # setpoint has been seeded.
+        for c in self.clients.values():
+            c.set_controller_modes(ControlMode.TORQUE, InputMode.PASSTHROUGH)
+            c.set_torque(0.0)
+            c.set_axis_state(AxisState.CLOSED_LOOP_CONTROL)
+
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             for c in self.clients.values():
@@ -204,6 +217,8 @@ class LegController:
         if missing:
             # Hard failure, not a warning. Arming without feedback is exactly
             # the blind position step this whole sequence exists to prevent.
+            for c in self.clients.values():
+                c.set_axis_state(AxisState.IDLE)     # don't leave them armed
             raise RuntimeError(
                 f'no encoder feedback from leg(s) {missing} within {timeout}s — '
                 'refusing to arm. Check the CAN interface, bitrate and node IDs.')
