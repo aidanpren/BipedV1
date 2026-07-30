@@ -50,8 +50,12 @@ odrive_bridge:
     # [SATURDAY] Verify OPEN-LOOP, before balance_controller ever runs. A wrong
     # sign here makes the balance loop ADD energy to a fall instead of catching
     # it -- it diverges as fast as the motors allow.
-    invert_left: false
-    invert_right: true
+    # CONFIRMED on hardware 2026-07-30. With left=false/right=true both wheels
+    # drove BACKWARD together — already agreeing with each other, just the
+    # wrong way round. So both signs flip; the left/right relationship was
+    # never the problem.
+    invert_left: true
+    invert_right: false
 
     current_limit: 12.0       # A -- also sets the real torque ceiling, see above
     vel_limit: 20.0           # output rev/s
