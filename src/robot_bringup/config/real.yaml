@@ -136,7 +136,7 @@ imu_node:
   ros__parameters:
     driver: 'uart'            # uart | spi | i2c | fake
                               # I2C is unreliable on a Pi (clock stretching).
-    port: '/dev/serial0'
+    port: '/dev/ttyAMA0'
     baud: 3000000
     i2c_address: 0x4A
     frame_id: 'imu_link'
