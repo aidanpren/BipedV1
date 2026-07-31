@@ -21,9 +21,11 @@ the **staged, on-a-stand bring-up of everything that moves under power.**
 | Legs moving under ROS | ⬜ next |
 | Power-cycle test: what `pos_estimate` does across a reboot | ⬜ **do first, decides `pos_max`** |
 | Leg zero measured (`zero_raw_*`, `use_measured_zero`) | ⬜ one-time |
-| Direction (`invert_*`) verified open-loop | ⬜ |
-| IMU + `mount_rpy` | ⬜ |
-| Wheels closed-loop + balance | ⬜ last |
+| Direction (`invert_*`) verified open-loop | ✅ 2026-07-30 — both flipped |
+| IMU up (I2C) + `mount_rpy` solved + pitch sign verified | ✅ 2026-07-30 |
+| Wheels closed-loop + balance | ⬜ next |
+| Left hip (node 3) back on the CAN bus | ⬜ dropped off, not blocking balance |
+| IMU rewired I2C -> UART | ⬜ before untethered running |
 
 ---
 
@@ -96,6 +98,33 @@ ros2 topic echo /joint_states     # spin a wheel by hand -> values change
 ---
 
 ## FIXES / GOTCHAS THAT COST TIME (read before debugging CAN again)
+
+- **Encoder estimates are ZERO unless the axis is in CLOSED_LOOP.** This fork
+  answers the RTR/cyclic `Get_Encoder_Estimates` with all-zero data in IDLE.
+  It looks exactly like "every joint is at the origin", which is a convincing
+  and completely wrong answer to seed a position ramp with. `leg_controller`
+  therefore arms in TORQUE mode at ZERO torque (limp, same as IDLE) purely to
+  make the encoder talk, reads, and only then enters POSITION mode.
+- **`mount_rpy` must be applied on the BODY side.** `imu_node` used to do
+  `quat_mul(q_mount, quat)` — a WORLD-frame rotation. That can still be tuned
+  to make a level robot read zero, so it passes calibration, but it does not
+  correct the SIGN of pitch as the robot tilts, and no value in the file can.
+  Correct form is `quat_mul(quat, quat_conj(q_mount))`.
+- **One calibration pose cannot determine the mount.** Level constrains it to
+  a family of rotations, half of which read pitch BACKWARDS. Use
+  `imu_calibrate.py --solve`, which takes a level pose AND a nose-down pose.
+- **A wrong `driver:` fails SILENTLY.** The BNO085 is wired for **I2C** (SDA
+  pin 3, SCL pin 5). With `driver:'uart'` the port opens, nothing ever
+  arrives, the node logs nothing and `/imu` stays empty — indistinguishable
+  from "still starting". `imu_node` now errors after 3s with no data.
+  Related trap: every working run used `-p driver:=i2c` on the command line,
+  which silently disappeared the moment we switched to `--params-file`.
+- **`/dev/serial0` does not exist on Ubuntu** (it is a Raspberry Pi OS udev
+  convention). On a Pi 5 use `/dev/ttyAMA0`; `ttyAMA10` is the DEBUG uart and
+  opening it succeeds while returning nothing forever.
+- **Verify params at RUNTIME, not in the file**: `ros2 param get /imu_node
+  driver`. The file, the launch override and the CLI override disagree often
+  enough that reading the file proves nothing.
 
 - **Swapped CAN-H/CAN-L → totally silent bus** (zero RX, zero errors). On slcan,
   a bitrate mismatch AND an H/L swap BOTH look like silence — slcan doesn't
