@@ -1,21 +1,31 @@
 """Compute mount_rpy for real.yaml, and verify the sign of pitch.
 
-mount_rpy is the rotation taking SENSOR axes into ROBOT axes. imu_node applies
-it as quat_mul(q_mount, q_sensor), so if the robot is held LEVEL and FORWARD
-the corrected orientation should be identity — meaning q_mount = conj(q_sensor).
-This reads the raw sensor, averages, and prints the value to paste.
+mount_rpy is the FIXED physical rotation taking SENSOR axes into ROBOT axes.
+imu_node applies it as quat_mul(q_sensor, quat_conj(q_mount)) — a BODY-side
+correction. It must contain NO heading: a heading baked into the mount acts as
+a body-frame yaw, and a body yaw MIXES roll into pitch, which no amount of
+re-calibrating can undo.
+
+USE --solve. It is the only mode that gets this right, because it builds the
+mount from two physical directions rather than from one attitude reading:
+gravity at level gives the robot's UP axis in sensor coords, and the rotation
+axis between level and nose-down gives the robot's PITCH axis. Two axes fully
+determine the frame, and neither depends on which way the robot is facing.
 
 A wrong mount_rpy fails exactly like a wrong invert_*: the balance loop gets a
 mis-signed pitch and drives into the fall. Do this before torque is enabled.
 
-    # 1. imu_node with NO correction applied yet
-    ros2 run robot_base imu_node --ros-args -p driver:=uart
+    # 1. imu_node with NO correction applied
+    ros2 run robot_base imu_node --ros-args \
+        --params-file src/robot_bringup/config/real.yaml \
+        -p mount_rpy:="[0.0, 0.0, 0.0]"
 
-    # 2. hold the robot LEVEL and facing FORWARD, then:
-    python3 tools/imu_calibrate.py
+    # 2. level pose, then nose-down pose:
+    python3 tools/imu_calibrate.py --solve
 
-    # 3. paste mount_rpy into real.yaml, restart imu_node WITH it, then:
+    # 3. paste into real.yaml, restart imu_node WITHOUT the override, then:
     python3 tools/imu_calibrate.py --verify
+    python3 tools/imu_calibrate.py --watch     # nose-down -> pitch POSITIVE
 """
 import argparse
 import math
@@ -95,6 +105,86 @@ def quat_from_rpy(roll, pitch, yaw):
     cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
     return (cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy,
             cr * sp * cy + sr * cp * sy, cr * cp * sy - sr * sp * cy)
+
+
+def quat_rotate(q, v):
+    w, x, y, z = q
+    vx, vy, vz = v
+    tx = 2 * (y * vz - z * vy)
+    ty = 2 * (z * vx - x * vz)
+    tz = 2 * (x * vy - y * vx)
+    return (vx + w * tx + (y * tz - z * ty),
+            vy + w * ty + (z * tx - x * tz),
+            vz + w * tz + (x * ty - y * tx))
+
+
+def _norm(v):
+    m = math.sqrt(sum(c * c for c in v))
+    return tuple(c / m for c in v)
+
+
+def _cross(a, b):
+    return (a[1] * b[2] - a[2] * b[1],
+            a[2] * b[0] - a[0] * b[2],
+            a[0] * b[1] - a[1] * b[0])
+
+
+def _dot(a, b):
+    return sum(x * y for x, y in zip(a, b))
+
+
+def matrix_to_quat(m):
+    """m is 3 rows. Shepperd's method — picks the numerically stable branch."""
+    t = m[0][0] + m[1][1] + m[2][2]
+    if t > 0:
+        s = math.sqrt(t + 1.0) * 2
+        return (0.25 * s, (m[2][1] - m[1][2]) / s,
+                (m[0][2] - m[2][0]) / s, (m[1][0] - m[0][1]) / s)
+    if m[0][0] > m[1][1] and m[0][0] > m[2][2]:
+        s = math.sqrt(1.0 + m[0][0] - m[1][1] - m[2][2]) * 2
+        return ((m[2][1] - m[1][2]) / s, 0.25 * s,
+                (m[0][1] + m[1][0]) / s, (m[0][2] + m[2][0]) / s)
+    if m[1][1] > m[2][2]:
+        s = math.sqrt(1.0 + m[1][1] - m[0][0] - m[2][2]) * 2
+        return ((m[0][2] - m[2][0]) / s, (m[0][1] + m[1][0]) / s,
+                0.25 * s, (m[1][2] + m[2][1]) / s)
+    s = math.sqrt(1.0 + m[2][2] - m[0][0] - m[1][1]) * 2
+    return ((m[1][0] - m[0][1]) / s, (m[0][2] + m[2][0]) / s,
+            (m[1][2] + m[2][1]) / s, 0.25 * s)
+
+
+def solve_geometric(q_level, q_down):
+    """Build the mount from two poses using only PHYSICAL directions.
+
+    Contains no heading by construction, which is the whole point — a heading
+    baked into the mount acts as a body-frame yaw, and a body yaw MIXES roll
+    into pitch. That is unfixable by any amount of refining.
+
+      * robot UP in sensor coords: rotate world +z back through the level
+        attitude. Gravity gives this; it is heading-independent.
+      * robot PITCH AXIS in sensor coords: the rotation from level to
+        nose-down, expressed in the sensor frame, is a rotation about the
+        robot's own +y. Its axis is therefore +y in sensor coords.
+
+    Two axes fix the third, so the frame is fully determined. Returns
+    (roll, pitch, yaw) for mount_rpy, plus the tilt angle actually used.
+    """
+    z_r = _norm(quat_rotate(quat_conj(q_level), (0.0, 0.0, 1.0)))
+
+    d = quat_mul(quat_conj(q_level), q_down)      # level->down, in SENSOR frame
+    if d[0] < 0:
+        d = tuple(-v for v in d)                  # positive rotation angle
+    angle = 2 * math.acos(max(-1.0, min(1.0, d[0])))
+    s = math.sqrt(max(1e-12, 1 - d[0] * d[0]))
+    y_r = _norm((d[1] / s, d[2] / s, d[3] / s))
+
+    # make up exactly perpendicular to the pitch axis before completing
+    z_r = _norm(tuple(a - _dot(z_r, y_r) * b for a, b in zip(z_r, y_r)))
+    x_r = _norm(_cross(y_r, z_r))                 # x = y cross z (right-handed)
+
+    # rows are the ROBOT basis vectors written in SENSOR coords == R_robot<-sensor
+    q = matrix_to_quat([x_r, y_r, z_r])
+    return quat_to_rpy(*q), angle
 
 
 def solve(node, samples, timeout):
@@ -283,52 +373,32 @@ def main():
             print('\nNo messages on /imu — is imu_node running?')
             rclpy.shutdown()
             return 1
-        _, _, ok, closest = res
-        if ok:
-            err, dp, rpy = ok[0]
-            print(f'\n{len(ok)} candidate(s) satisfy level AND nose-down-positive.'
-                  f'\nBest: level error {math.degrees(err):.2f} deg, '
-                  f'nose-down pitch {math.degrees(dp):+.1f} deg\n')
-            print('paste into real.yaml under imu_node:\n')
-            print(f'    mount_rpy: [{rpy[0]:.6f}, {rpy[1]:.6f}, {rpy[2]:.6f}]')
-            print(f'    # = [{math.degrees(rpy[0]):.0f}, {math.degrees(rpy[1]):.0f}, '
-                  f'{math.degrees(rpy[2]):.0f}] deg, solved 2-pose')
-            if len(ok) > 1:
-                print('\nothers that also fit (differ only in heading):')
-                for e, d, r in ok[1:4]:
-                    print(f'    [{r[0]:.4f}, {r[1]:.4f}, {r[2]:.4f}]  '
-                          f'level {math.degrees(e):.1f} deg')
-        else:
-            print('\nNO candidate satisfies both. Closest by level error:')
-            for e, d, r in closest:
-                print(f'    [{math.degrees(r[0]):4.0f},{math.degrees(r[1]):4.0f},'
-                      f'{math.degrees(r[2]):4.0f}] deg  level {math.degrees(e):5.1f}  '
-                      f'nose-down pitch {math.degrees(d):+6.1f}')
-            print('\nIf every nose-down pitch is NEGATIVE, you tilted the wrong\n'
-                  'way — nose-down means the FRONT goes toward the floor.\n'
-                  'If level errors are all large, the board is not mounted at a\n'
-                  '90-degree multiple and needs the one-pose calibration instead.')
+        q_level, q_down, _, _ = res
+        (gr, gp, gy), tilt = solve_geometric(q_level, q_down)
+        q_m = quat_from_rpy(gr, gp, gy)
+        lr, lp, _ = quat_to_rpy(*quat_mul(q_level, quat_conj(q_m)))
+        dr, dp, _ = quat_to_rpy(*quat_mul(q_down, quat_conj(q_m)))
+
+        print(f'\ntilt between the two poses: {math.degrees(tilt):.1f} deg')
+        if math.degrees(tilt) < 8:
+            print('WARNING: that is a small tilt. The pitch axis estimate gets '
+                  'noisy below ~10 deg — re-run with a bigger nose-down.')
+        if dp < 0:
+            print('\n*** nose-down reads NEGATIVE pitch. You almost certainly '
+                  'tilted the robot NOSE-UP. Re-run and tip the FRONT toward '
+                  'the floor. ***')
+        print('\ngeometric solve (exact, contains NO heading):')
+        print(f'  level residual  roll {math.degrees(lr):+.3f}  pitch {math.degrees(lp):+.3f} deg')
+        print(f'  nose-down reads pitch {math.degrees(dp):+.2f} deg '
+              f'({"POSITIVE — correct" if dp > 0 else "NEGATIVE — WRONG"})')
+        print('\npaste into real.yaml under imu_node:\n')
+        print(f'    mount_rpy: [{gr:.6f}, {gp:.6f}, {gy:.6f}]')
+        print(f'    # = [{math.degrees(gr):+.2f}, {math.degrees(gp):+.2f}, '
+              f'{math.degrees(gy):+.2f}] deg, geometric 2-pose solve')
+        print('\nThis is the FINAL value — do NOT run --refine on top of it.')
+        print('Restart imu_node, then --verify and --watch.')
         rclpy.shutdown()
         return 0
-    print(f'listening on /imu for up to {a.timeout}s — hold the robot LEVEL '
-          'and FORWARD, still...')
-    quats = collect(node, a.samples, a.timeout)
-    if not quats:
-        print('\nNo messages on /imu. Is imu_node running? '
-              '(ros2 run robot_base imu_node --ros-args -p driver:=uart)')
-        rclpy.shutdown()
-        return 1
-
-    w, x, y, z = average(quats)
-    roll, pitch, yaw = quat_to_rpy(w, x, y, z)
-    # measure spread against the MEAN, in the mean's hemisphere — aligning to
-    # sample 0 instead would report ~2.0 whenever sample 0 is the negated one
-    mean = (w, x, y, z)
-    spread = max(abs(q[i] - mean[i]) for q in align(quats, mean) for i in range(4))
-    print(f'\n{len(quats)} samples, max deviation {spread:.4f} '
-          f'({"steady" if spread < 0.02 else "MOVING — hold it stiller"})')
-    print(f'measured  roll {math.degrees(roll):+7.2f}  '
-          f'pitch {math.degrees(pitch):+7.2f}  yaw {math.degrees(yaw):+7.2f}  (deg)')
 
     if a.verify:
         off = max(abs(roll), abs(pitch))
