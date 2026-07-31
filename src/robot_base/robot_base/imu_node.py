@@ -162,6 +162,7 @@ class ImuNode:
             self.driver = BNO08xDriver(self.node, kind, p('port'), p('baud'),
                                        p('i2c_address'))
             self.node.get_logger().info(f'BNO085 up on {kind}')
+        self.kind = kind
 
         if self.identity_mount:
             self.node.get_logger().warn(
@@ -170,6 +171,22 @@ class ImuNode:
 
         self.pub = self.node.create_publisher(Imu, 'imu', 10)
         self.timer = self.node.create_timer(1.0 / p('publish_rate'), self.update)
+
+        # A wrong `driver`/`port` fails SILENTLY: the device opens, no data ever
+        # arrives, and the node sits there logging nothing while /imu stays
+        # empty. That is indistinguishable from "still starting up" and it has
+        # cost real bench time, so say it out loud.
+        self.published = 0
+        self.node.create_timer(3.0, self.liveness_check)
+
+    def liveness_check(self):
+        if self.published == 0:
+            self.node.get_logger().error(
+                f"no IMU data after 3s on driver '{self.kind}'. The device "
+                'opened but nothing is arriving — usually the wrong interface '
+                'for how the sensor is WIRED (I2C on pins 3/5 vs UART on 8/10), '
+                'or PS0/PS1 not strapped for UART. Check `ros2 param get '
+                '/imu_node driver`.')
 
     def update(self):
         try:
@@ -205,6 +222,7 @@ class ImuNode:
         (msg.linear_acceleration.x, msg.linear_acceleration.y,
          msg.linear_acceleration.z) = accel
         self.pub.publish(msg)
+        self.published += 1
 
 
 def main(args=None):

@@ -134,9 +134,18 @@ leg_controller:
 
 imu_node:
   ros__parameters:
-    driver: 'uart'            # uart | spi | i2c | fake
-                              # I2C is unreliable on a Pi (clock stretching).
-    port: '/dev/ttyAMA0'
+    # CONFIRMED on hardware 2026-07-30: the BNO085 is wired for I2C -- SDA on
+    # pin 3 (GPIO2), SCL on pin 5 (GPIO3). It is NOT on the UART pins, so
+    # driver:'uart' fails SILENTLY: the port opens, no data ever arrives, the
+    # node logs nothing and /imu stays empty.
+    #
+    # TEMPORARY. I2C clock stretching on a Pi drops samples ("IMU read failed",
+    # 20 ms gaps at 100 Hz) and that is not good enough to hold the robot up.
+    # Rewire to UART before untethered running: sensor TX -> pin 10 (GPIO15 RX),
+    # sensor RX -> pin 8 (GPIO14 TX), and strap PS1 HIGH / PS0 LOW -- the
+    # BNO085 boots into I2C mode otherwise. /dev/ttyAMA0 is enabled and free.
+    driver: 'i2c'             # uart | spi | i2c | fake
+    port: '/dev/ttyAMA0'      # only used when driver is 'uart'
     baud: 3000000
     i2c_address: 0x4A
     frame_id: 'imu_link'
