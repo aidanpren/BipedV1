@@ -154,12 +154,67 @@ def quat_conj(q):
     return (q[0], -q[1], -q[2], -q[3])
 
 
+def current_mount(node='/imu_node'):
+    """Read the mount_rpy the RUNNING node is actually using.
+
+    Deliberately asks the node, not the yaml — a CLI override beats the file
+    and the two disagree often enough that reading the file proves nothing.
+    """
+    import re
+    import subprocess
+    try:
+        out = subprocess.run(['ros2', 'param', 'get', node, 'mount_rpy'],
+                             capture_output=True, text=True, timeout=15).stdout
+    except Exception:
+        return None
+    nums = re.findall(r'-?\d+\.\d+(?:[eE][-+]?\d+)?', out)
+    return [float(v) for v in nums[:3]] if len(nums) >= 3 else None
+
+
+def refine(node, samples, timeout):
+    """Fold the remaining error into an ALREADY-APPLIED mount_rpy.
+
+    imu_node publishes q_corrected = q_sensor (x) conj(q_old). Calibrating
+    against that measures only the residual q_res, so the corrected mount is
+    q_new = q_res (x) q_old -- residual on the LEFT. You cannot add the angle
+    triples; rotations do not compose that way, which is the mistake this
+    exists to prevent.
+    """
+    old = current_mount()
+    if old is None:
+        print('Could not read mount_rpy from /imu_node — is it running?')
+        return None
+    print(f'current mount_rpy: [{old[0]:.6f}, {old[1]:.6f}, {old[2]:.6f}]')
+    print(f'  = [{math.degrees(old[0]):+.2f}, {math.degrees(old[1]):+.2f}, '
+          f'{math.degrees(old[2]):+.2f}] deg')
+    print(f'\nleave the robot RESTING and STILL, measuring for {timeout}s...')
+    quats = collect(node, samples, timeout)
+    if not quats:
+        print('No messages on /imu.')
+        return None
+
+    mean = average(quats)
+    spread = max(abs(q[i] - mean[i]) for q in align(quats, mean) for i in range(4))
+    r, p, _ = quat_to_rpy(*mean)
+    print(f'{len(quats)} samples, max deviation {spread:.4f} '
+          f'({"steady" if spread < 0.02 else "MOVING — hold it stiller"})')
+    print(f'residual: roll {math.degrees(r):+.3f}  pitch {math.degrees(p):+.3f} deg')
+
+    q_new = quat_mul(mean, quat_from_rpy(*old))
+    nr, np_, ny = quat_to_rpy(*q_new)
+    return (r, p), (nr, np_, ny), spread
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--samples', type=int, default=100)
     ap.add_argument('--timeout', type=float, default=10.0)
     ap.add_argument('--verify', action='store_true',
                     help='check an already-applied mount_rpy instead')
+    ap.add_argument('--refine', action='store_true',
+                    help='fold the remaining tilt into the mount_rpy the node '
+                         'is ALREADY using. Run this with the correction '
+                         'applied — no need to zero it first.')
     ap.add_argument('--watch', action='store_true',
                     help='live roll/pitch/yaw in DEGREES. Use this for the sign '
                          'check -- the raw quaternion y component is not pitch.')
@@ -171,6 +226,27 @@ def main():
 
     rclpy.init()
     node = rclpy.create_node('imu_calibrate')
+
+    if a.refine:
+        res = refine(node, a.samples, a.timeout)
+        if res is None:
+            rclpy.shutdown()
+            return 1
+        (rr, rp), (nr, np_, ny), spread = res
+        if max(abs(rr), abs(rp)) < math.radians(0.3):
+            print('\nResidual is already under 0.3 deg — nothing worth changing.')
+        else:
+            print('\npaste into real.yaml under imu_node:\n')
+            print(f'    mount_rpy: [{nr:.6f}, {np_:.6f}, {ny:.6f}]')
+            print(f'    # = [{math.degrees(nr):+.2f}, {math.degrees(np_):+.2f}, '
+                  f'{math.degrees(ny):+.2f}] deg, refined')
+            print('\nrestart imu_node, then --verify, then --watch to confirm '
+                  'nose-down is still POSITIVE.')
+        if spread >= 0.02:
+            print('\nWARNING: samples were not steady. Rest the robot on a flat '
+                  'surface rather than holding it, and re-run.')
+        rclpy.shutdown()
+        return 0
 
     if a.watch:
         print('live attitude — tilt NOSE-DOWN, pitch must go POSITIVE. Ctrl-C to stop.\n')
