@@ -156,5 +156,5 @@ imu_node:
     # a bench BEFORE torque is ever enabled: a bad mount rotation feeds the
     # balance loop a mis-signed pitch, which fails the same way a wrong
     # invert_* does.
-    mount_rpy: [0.048811, 0.017257, 3.107371]
+    mount_rpy: [-0.051677, 0.016108, 3.107462]
 
