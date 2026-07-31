@@ -23,16 +23,20 @@ balance_controller:
     k_yaw: 4.0
     max_lean: 0.3
 
-    # [SATURDAY] DELIBERATELY LOW for first power-on. Raise only on purpose.
+    # MEASURED on hardware 2026-07-31:
+    #     odrv0.axis0.motor.config.torque_constant = 0.43 Nm/A  (motor shaft)
+    #     => motor_kv = 8.27 / 0.43 = 19.2, NOT the placeholder 100
+    #     => output ceiling = 0.43 * current_limit 12.0 * gear_ratio 8 = 41.3 Nm
+    # So the ODrive's current limit does NOT bind first, and sim's 40.0 was
+    # about right all along. The old "deliberately low" 4.0 was low by 10x.
     #
-    # Cross-check before raising -- the ODrive's CURRENT limit may bind first,
-    # in which case this ceiling is fiction and never actually engages:
-    #     max output torque = current_limit * (8.27 / motor_kv) * gear_ratio
-    # With current_limit 12.0 and the PLACEHOLDER motor_kv 100, that is
-    # ~7.9 Nm -- far below sim's 40.0. Confirm motor_kv from the GIM8108 spec
-    # or measurement, then set this BELOW the computed ceiling so the
-    # controller's own saturation is the thing that binds, not the ODrive's.
-    max_torque: 4.0
+    # What this value really sets is WHERE THE CONTROLLER SATURATES. With
+    # k3 = 20, torque = 20 * pitch, so saturation happens at pitch =
+    # max_torque / 20 rad. At 2.0 that is 5.7 deg -- flat out before the robot
+    # has meaningfully begun to fall. At 8.0 it is 23 deg, past anything
+    # recoverable. Start at 8.0 for the first ground test; there is headroom
+    # to 41.3 but no reason to hand it over before the gains are trusted.
+    max_torque: 8.0
 
 odrive_bridge:
   ros__parameters:
