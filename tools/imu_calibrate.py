@@ -142,6 +142,9 @@ def main():
     ap.add_argument('--timeout', type=float, default=10.0)
     ap.add_argument('--verify', action='store_true',
                     help='check an already-applied mount_rpy instead')
+    ap.add_argument('--watch', action='store_true',
+                    help='live roll/pitch/yaw in DEGREES. Use this for the sign '
+                         'check -- the raw quaternion y component is not pitch.')
     ap.add_argument('--solve', action='store_true',
                     help='two-pose solve: finds the mount that also gets the '
                          'PITCH SIGN right. Use this when level-only '
@@ -150,6 +153,34 @@ def main():
 
     rclpy.init()
     node = rclpy.create_node('imu_calibrate')
+
+    if a.watch:
+        print('live attitude — tilt NOSE-DOWN, pitch must go POSITIVE. Ctrl-C to stop.\n')
+        last = [None]
+
+        def cb(msg):
+            o = msg.orientation
+            r, p, y = quat_to_rpy(o.w, o.x, o.y, o.z)
+            arrow = ''
+            if last[0] is not None:
+                d = p - last[0]
+                arrow = ' pitch RISING' if d > 0.002 else (' pitch FALLING' if d < -0.002 else '')
+            last[0] = p
+            print(f'\rroll {math.degrees(r):+7.2f}  pitch {math.degrees(p):+7.2f}  '
+                  f'yaw {math.degrees(y):+7.2f}{arrow:<15}', end='', flush=True)
+
+        node.create_subscription(Imu, '/imu', cb, 20)
+        try:
+            rclpy.spin(node)
+        except (KeyboardInterrupt, Exception):
+            # SIGTERM tears the context down underneath spin(); that is a normal
+            # way for this to end, not an error worth a traceback
+            print()
+        try:
+            rclpy.shutdown()
+        except Exception:
+            pass
+        return 0
 
     if a.solve:
         print('Run imu_node with mount_rpy [0.0, 0.0, 0.0] for this.')
