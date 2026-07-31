@@ -178,13 +178,22 @@ def solve_geometric(q_level, q_down):
     s = math.sqrt(max(1e-12, 1 - d[0] * d[0]))
     y_r = _norm((d[1] / s, d[2] / s, d[3] / s))
 
-    # make up exactly perpendicular to the pitch axis before completing
-    z_r = _norm(tuple(a - _dot(z_r, y_r) * b for a, b in zip(z_r, y_r)))
+    # The two measurements are NOT equally trustworthy, so orthogonalise the
+    # weak one against the strong one. Gravity is a precise, repeatable
+    # physical reference; a hand-held nose-down tilt always carries a few
+    # degrees of out-of-plane wobble. Projecting UP onto the tilt plane (the
+    # other way round) lets that wobble tip the whole frame and leaves a
+    # standing roll error — measured at 6 deg on real hardware.
+    #
+    # Keeping z exact makes the level pose read exactly flat, and confines the
+    # tilt sloppiness to the in-plane (heading) axis, which balance ignores.
+    tilt_out_of_plane = math.degrees(math.asin(max(-1.0, min(1.0, _dot(y_r, z_r)))))
+    y_r = _norm(tuple(a - _dot(y_r, z_r) * b for a, b in zip(y_r, z_r)))
     x_r = _norm(_cross(y_r, z_r))                 # x = y cross z (right-handed)
 
     # rows are the ROBOT basis vectors written in SENSOR coords == R_robot<-sensor
     q = matrix_to_quat([x_r, y_r, z_r])
-    return quat_to_rpy(*q), angle
+    return quat_to_rpy(*q), angle, tilt_out_of_plane
 
 
 def solve(node, samples, timeout):
@@ -204,7 +213,14 @@ def solve(node, samples, timeout):
     level = collect(node, samples, timeout)
     if not level:
         return None
-    input('2/2  Now tilt it NOSE-DOWN maybe 20-30 deg, hold still. Press Enter...')
+    # HOW you tilt matters more than how far. The level->down rotation axis is
+    # what fixes the in-plane alignment, and a hand tilt carries several degrees
+    # of out-of-plane wobble: 6 deg of wobble on a 21 deg tilt throws the axis
+    # 16 deg off, which cross-couples roll into pitch. Tipping the robot on its
+    # WHEELS constrains the rotation to the real pitch axis mechanically, and
+    # costs nothing.
+    input('2/2  Now tip it NOSE-DOWN 20-30 deg — ROLL IT FORWARD ON ITS WHEELS\n'
+          '     so the axle sets the axis, do not twist it by hand. Enter...')
     down = collect(node, samples, timeout)
     if not down:
         return None
@@ -374,15 +390,23 @@ def main():
             rclpy.shutdown()
             return 1
         q_level, q_down, _, _ = res
-        (gr, gp, gy), tilt = solve_geometric(q_level, q_down)
+        (gr, gp, gy), tilt, wobble = solve_geometric(q_level, q_down)
         q_m = quat_from_rpy(gr, gp, gy)
         lr, lp, _ = quat_to_rpy(*quat_mul(q_level, quat_conj(q_m)))
         dr, dp, _ = quat_to_rpy(*quat_mul(q_down, quat_conj(q_m)))
 
-        print(f'\ntilt between the two poses: {math.degrees(tilt):.1f} deg')
+        print(f'\ntilt between the two poses: {math.degrees(tilt):.1f} deg '
+              f'(out-of-plane wobble {wobble:+.1f} deg, discarded)')
         if math.degrees(tilt) < 8:
             print('WARNING: that is a small tilt. The pitch axis estimate gets '
                   'noisy below ~10 deg — re-run with a bigger nose-down.')
+        skew = math.degrees(math.atan2(abs(wobble), max(1.0, math.degrees(tilt))))
+        if skew > 3.0:
+            print(f'WARNING: the tilt axis is {skew:.1f} deg off the pitch axis. '
+                  'Level will still be exact, but roll will cross-couple into '
+                  f'pitch by ~{math.sin(math.radians(skew)) * 100:.0f}%, and the '
+                  'balance loop reacts to pitch. Re-run tipping the robot on '
+                  'its WHEELS rather than twisting it by hand.')
         if dp < 0:
             print('\n*** nose-down reads NEGATIVE pitch. You almost certainly '
                   'tilted the robot NOSE-UP. Re-run and tip the FRONT toward '
