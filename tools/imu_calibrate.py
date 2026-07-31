@@ -248,8 +248,10 @@ def main():
         rclpy.shutdown()
         return 0
 
-    # q_mount = conj(q_sensor), so that quat_mul(q_mount, q_sensor) = identity
-    mr, mp, my = quat_to_rpy(w, -x, -y, -z)
+    # imu_node applies q_corrected = q_sensor (x) conj(q_mount), so making a
+    # level robot read identity needs q_mount = q_sensor itself — NOT its
+    # conjugate. (It was the conjugate while imu_node left-multiplied.)
+    mr, mp, my = quat_to_rpy(w, x, y, z)
     print('\npaste into src/robot_bringup/config/real.yaml under imu_node:\n')
     print(f'    mount_rpy: [{mr:.6f}, {mp:.6f}, {my:.6f}]')
     print(f'    # = [{math.degrees(mr):+.1f}, {math.degrees(mp):+.1f}, '
