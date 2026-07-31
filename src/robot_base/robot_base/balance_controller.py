@@ -23,6 +23,11 @@ class BalanceController:
         self.node.declare_parameter('k_yaw', 4.0)
         self.node.declare_parameter('max_lean', 0.3)
         self.node.declare_parameter('max_torque', 40.0)
+        # chassis pitch at which the CoM is over the contact patch, rad.
+        # POSITIVE = nose-down, which is what a BACK-heavy robot needs.
+        # Measure it: power off, balance the robot by hand on its wheels, read
+        # pitch from `imu_calibrate.py --watch`. See BALANCE_RUNBOOK.md.
+        self.node.declare_parameter('pitch_trim', 0.0)
         self.cutoff_pitch = 0.7
         self.wheel_radius = 0.105
 
@@ -101,6 +106,22 @@ class BalanceController:
                 pitch_target = a1 * (self.x - self.x_home) + a2 * self.v_f
             if not settled:
                 pitch_target = 0.0
+
+            # TRIM: the chassis angle at which the CoM sits over the contact
+            # patch. It is NOT zero unless the robot is perfectly balanced fore
+            # and aft — a back-heavy robot has to stand slightly nose-down to
+            # put its mass over the wheels.
+            #
+            # Without this the inner loop holds pitch = 0, gravity applies a
+            # constant torque about the contact point, and the only way to keep
+            # that angle is to accelerate backwards forever. It looks exactly
+            # like a tuning problem and no k3/k4 can fix it.
+            #
+            # The outer loop CAN absorb it, but only by carrying a permanent
+            # position error of pitch_trim/a1 — it would sit parked off home,
+            # leaning, with a1 fighting gravity full time. Stating the trim
+            # explicitly frees the outer loop to handle actual disturbances.
+            pitch_target += self.node.get_parameter('pitch_trim').value
             pitch_target = max(-max_lean, min(max_lean, pitch_target))
 
             # balance (common) + steering (differential)

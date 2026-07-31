@@ -23,6 +23,16 @@ balance_controller:
     k_yaw: 4.0
     max_lean: 0.3
 
+    # [SATURDAY] Chassis pitch where the CoM sits over the contact patch, rad.
+    # POSITIVE = nose-down. A back-heavy robot needs a positive trim; leave it
+    # at 0.0 and the inner loop holds pitch=0, gravity pulls constantly, and
+    # the robot accelerates BACKWARD forever. That is not a tuning fault and no
+    # k3/k4 fixes it.
+    # MEASURE: power off, balance the robot by hand on its wheels until it
+    # neither wants to tip forward nor back, and read pitch from
+    # `python3 tools/imu_calibrate.py --watch`. Put that number here.
+    pitch_trim: 0.0
+
     # MEASURED on hardware 2026-07-31:
     #     odrv0.axis0.motor.config.torque_constant = 0.43 Nm/A  (motor shaft)
     #     => motor_kv = 8.27 / 0.43 = 19.2, NOT the placeholder 100

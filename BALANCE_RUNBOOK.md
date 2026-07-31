@@ -176,6 +176,41 @@ Finally the joystick: `ros2 launch robot_teleop teleop.launch.py`.
 
 ---
 
+## THE BACK-HEAVY DRIFT — `pitch_trim`
+
+If it drifts steadily one way and no `k3`/`k4` combination stops it, it is
+almost certainly not a tuning problem.
+
+The equilibrium is where the CoM sits over the CONTACT PATCH, which is only
+"chassis level" if the robot is perfectly balanced fore and aft. Back-heavy
+means the chassis has to stand slightly NOSE-DOWN to put the mass over the
+wheels. Holding pitch = 0 instead leaves a constant gravity torque, and the
+only way to hold that angle is to accelerate backwards forever.
+
+**Measure the trim:**
+1. Power the motors OFF.
+2. Balance the robot by hand on its wheels — find the angle where it does not
+   want to tip either way. Rock it gently to feel the null.
+3. Read pitch there:
+   ```bash
+   python3 tools/imu_calibrate.py --watch
+   ```
+4. Put that number in real.yaml as `pitch_trim` (POSITIVE = nose-down).
+
+**Then re-run TEST 2.** The drift should stop with `a1`/`a2` still at zero,
+because the inner loop is now holding the actual equilibrium angle.
+
+Sanity: for a robot this size expect a few degrees, i.e. 0.02-0.10 rad. If the
+number you measure is bigger than ~0.15 rad, the robot is very unbalanced and
+you would be better off moving the battery than trimming around it.
+
+Note the outer loop CAN hide this on its own — `a1` will command the needed
+lean — but only by carrying a permanent position error of `pitch_trim/a1`. It
+parks off-home with `a1` fighting gravity full time, which eats the authority
+you wanted for rejecting real disturbances.
+
+---
+
 ## AFTER IT WORKS — the backlog
 
 1. **Left hip (node 3)** back on the CAN bus, then legs via `leg_controller`
