@@ -49,13 +49,31 @@ def collect(node, samples, timeout):
     return got
 
 
+def align(quats, ref=None):
+    """Put every sample in the same hemisphere as `ref` (default: the first).
+
+    q and -q are the SAME rotation, and the sensor is free to report either.
+    Near w = 0 -- which is exactly where a ~180 deg mount yaw puts you -- it
+    flips between them sample to sample. Averaging without this cancels
+    opposite-signed samples and produces a confident, wrong answer with a
+    deviation of ~2.0 (the full component range). Fixing the sign of the SUM
+    afterwards does not help: the damage is already done.
+    """
+    ref = quats[0] if ref is None else ref
+    out = []
+    for q in quats:
+        dot = sum(a * b for a, b in zip(ref, q))
+        out.append(tuple(-v for v in q) if dot < 0 else tuple(q))
+    return out
+
+
 def average(quats):
-    """Componentwise mean + renormalise. Fine for the small spread of a held
-    robot; it is not a proper quaternion mean and would be wrong over big
-    angular ranges."""
+    """Componentwise mean + renormalise, after hemisphere alignment. Fine for
+    the small spread of a held robot; not a proper quaternion mean and would
+    be wrong over big angular ranges."""
+    quats = align(quats)
     n = len(quats)
     acc = [sum(q[i] for q in quats) / n for i in range(4)]
-    # keep the hemisphere consistent, or opposite-sign quats cancel
     if acc[0] < 0:
         acc = [-v for v in acc]
     mag = math.sqrt(sum(v * v for v in acc))
@@ -227,7 +245,10 @@ def main():
 
     w, x, y, z = average(quats)
     roll, pitch, yaw = quat_to_rpy(w, x, y, z)
-    spread = max(abs(q[i] - [w, x, y, z][i]) for q in quats for i in range(4))
+    # measure spread against the MEAN, in the mean's hemisphere — aligning to
+    # sample 0 instead would report ~2.0 whenever sample 0 is the negated one
+    mean = (w, x, y, z)
+    spread = max(abs(q[i] - mean[i]) for q in align(quats, mean) for i in range(4))
     print(f'\n{len(quats)} samples, max deviation {spread:.4f} '
           f'({"steady" if spread < 0.02 else "MOVING — hold it stiller"})')
     print(f'measured  roll {math.degrees(roll):+7.2f}  '
