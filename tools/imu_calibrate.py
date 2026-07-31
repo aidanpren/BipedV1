@@ -425,17 +425,31 @@ def main():
         return 0
 
     if a.verify:
+        print(f'\nlisten on /imu for up to {a.timeout}s — robot RESTING and still...')
+        quats = collect(node, a.samples, a.timeout)
+        if not quats:
+            print('No messages on /imu — is imu_node running?')
+            rclpy.shutdown()
+            return 1
+        mean = average(quats)
+        roll, pitch, yaw = quat_to_rpy(*mean)
+        spread = max(abs(q[i] - mean[i]) for q in align(quats, mean) for i in range(4))
+        print(f'{len(quats)} samples, max deviation {spread:.4f} '
+              f'({"steady" if spread < 0.02 else "MOVING — hold it stiller"})')
+        print(f'measured  roll {math.degrees(roll):+7.2f}  '
+              f'pitch {math.degrees(pitch):+7.2f}  yaw {math.degrees(yaw):+7.2f}  (deg)')
+        # yaw is heading, not a mount property — balance never reads it
         off = max(abs(roll), abs(pitch))
-        print(f'\nlevel error: {math.degrees(off):.2f} deg')
+        print(f'\nlevel error (roll/pitch only): {math.degrees(off):.2f} deg')
         if off < math.radians(2):
             print('PASS — mount_rpy is good.')
         else:
-            print('FAIL — still tilted. Re-run without --verify and repaste.')
+            print('FAIL — still tilted. Re-run --solve, tipping on the WHEELS.')
         print('\nNow check the SIGN, which is what actually kills the robot:\n'
-              '  ros2 topic echo /imu --field orientation\n'
-              'Tip the robot NOSE-DOWN (forward). Note which way pitch moves,\n'
-              'and confirm balance_controller drives the wheels the same way\n'
-              'the robot is falling. Get this backwards and it accelerates the fall.')
+              '  python3 tools/imu_calibrate.py --watch\n'
+              'Tip the robot NOSE-DOWN (forward). Pitch must go POSITIVE, and\n'
+              'roll should stay put. Backwards here and the loop drives INTO\n'
+              'the fall.')
         rclpy.shutdown()
         return 0
 
