@@ -38,6 +38,11 @@ def quat_mul(a, b):
     )
 
 
+def quat_conj(q):
+    w, x, y, z = q
+    return (w, -x, -y, -z)
+
+
 def quat_from_rpy(roll, pitch, yaw):
     cr, sr = math.cos(roll / 2), math.sin(roll / 2)
     cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
@@ -174,9 +179,21 @@ class ImuNode:
                                         throttle_duration_sec=2.0)
             return
 
-        # correct for how the sensor is bolted to the chassis
+        # Correct for how the sensor is bolted to the chassis.
+        #
+        # SIDE MATTERS. q_mount takes SENSOR axes -> ROBOT axes, a BODY-frame
+        # relationship, so the attitude correction is a RIGHT multiply by its
+        # conjugate:  q_world<-robot = q_world<-sensor  (x)  conj(q_robot<-sensor)
+        # Left-multiplying instead rotates in the WORLD frame. That can still
+        # be tuned to make a level robot read zero, so it survives calibration
+        # — but it does not correct the SIGN of pitch as the robot tilts, which
+        # is the one thing this correction exists to get right. (Found on
+        # hardware 2026-07-30: a backwards-mounted board read nose-down as
+        # negative pitch and no mount_rpy value could fix it.)
+        #
+        # Vectors are different: gyro/accel are plain rotations by q_mount.
         if not self.identity_mount:
-            quat = quat_mul(self.q_mount, quat)
+            quat = quat_mul(quat, quat_conj(self.q_mount))
             gyro = quat_rotate(self.q_mount, gyro)
             accel = quat_rotate(self.q_mount, accel)
 

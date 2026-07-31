@@ -62,16 +62,129 @@ def average(quats):
     return [v / mag for v in acc]
 
 
+def quat_mul(a, b):
+    aw, ax, ay, az = a
+    bw, bx, by, bz = b
+    return (aw * bw - ax * bx - ay * by - az * bz,
+            aw * bx + ax * bw + ay * bz - az * by,
+            aw * by - ax * bz + ay * bw + az * bx,
+            aw * bz + ax * by - ay * bx + az * bw)
+
+
+def quat_from_rpy(roll, pitch, yaw):
+    cr, sr = math.cos(roll / 2), math.sin(roll / 2)
+    cp, sp = math.cos(pitch / 2), math.sin(pitch / 2)
+    cy, sy = math.cos(yaw / 2), math.sin(yaw / 2)
+    return (cr * cp * cy + sr * sp * sy, sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy, cr * cp * sy - sr * sp * cy)
+
+
+def solve(node, samples, timeout):
+    """Find the mount rotation from TWO poses: level, then nose-down.
+
+    One pose is not enough. Level tells you which rotations put the robot flat,
+    but a whole family of those remain — including ones that read pitch
+    BACKWARDS. Only a second, deliberately pitched pose picks the sign, and the
+    sign is the thing that decides whether the balance loop catches a fall or
+    drives into it.
+
+    Roll/pitch are invariant to the sensor's arbitrary world heading (a
+    left-multiplied Rz only shifts the yaw term of a ZYX decomposition), so we
+    score on roll/pitch alone and leave heading free.
+    """
+    input('\n1/2  Hold the robot LEVEL and FORWARD, still. Press Enter...')
+    level = collect(node, samples, timeout)
+    if not level:
+        return None
+    input('2/2  Now tilt it NOSE-DOWN maybe 20-30 deg, hold still. Press Enter...')
+    down = collect(node, samples, timeout)
+    if not down:
+        return None
+
+    q_level, q_down = average(level), average(down)
+    # how far it actually got tilted, in the raw sensor frame — used to sanity
+    # check that the two poses really are different
+    print(f'\ncaptured {len(level)} level + {len(down)} nose-down samples')
+
+    best = []
+    step = math.pi / 2
+    seen = set()
+    for i in range(4):
+        for j in range(4):
+            for k in range(4):
+                rpy = (i * step, j * step, k * step)
+                q_m = quat_from_rpy(*rpy)
+                key = tuple(round(v, 6) for v in
+                            (q_m if q_m[0] >= 0 else tuple(-v for v in q_m)))
+                if key in seen:
+                    continue
+                seen.add(key)
+                cq = quat_conj(q_m)
+                lr, lp, _ = quat_to_rpy(*quat_mul(q_level, cq))
+                _, dp, _ = quat_to_rpy(*quat_mul(q_down, cq))
+                level_err = max(abs(lr), abs(lp))
+                best.append((level_err, dp, rpy))
+
+    # keep candidates that sit level AND read nose-down as POSITIVE pitch,
+    # which is what balance_controller's positive k3 requires
+    ok = [c for c in best if c[0] < math.radians(8) and c[1] > math.radians(5)]
+    ok.sort(key=lambda c: c[0])
+    return q_level, q_down, ok, sorted(best, key=lambda c: c[0])[:4]
+
+
+def quat_conj(q):
+    return (q[0], -q[1], -q[2], -q[3])
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--samples', type=int, default=100)
     ap.add_argument('--timeout', type=float, default=10.0)
     ap.add_argument('--verify', action='store_true',
                     help='check an already-applied mount_rpy instead')
+    ap.add_argument('--solve', action='store_true',
+                    help='two-pose solve: finds the mount that also gets the '
+                         'PITCH SIGN right. Use this when level-only '
+                         'calibration leaves nose-down reading negative.')
     a = ap.parse_args()
 
     rclpy.init()
     node = rclpy.create_node('imu_calibrate')
+
+    if a.solve:
+        print('Run imu_node with mount_rpy [0.0, 0.0, 0.0] for this.')
+        res = solve(node, a.samples, a.timeout)
+        if res is None:
+            print('\nNo messages on /imu — is imu_node running?')
+            rclpy.shutdown()
+            return 1
+        _, _, ok, closest = res
+        if ok:
+            err, dp, rpy = ok[0]
+            print(f'\n{len(ok)} candidate(s) satisfy level AND nose-down-positive.'
+                  f'\nBest: level error {math.degrees(err):.2f} deg, '
+                  f'nose-down pitch {math.degrees(dp):+.1f} deg\n')
+            print('paste into real.yaml under imu_node:\n')
+            print(f'    mount_rpy: [{rpy[0]:.6f}, {rpy[1]:.6f}, {rpy[2]:.6f}]')
+            print(f'    # = [{math.degrees(rpy[0]):.0f}, {math.degrees(rpy[1]):.0f}, '
+                  f'{math.degrees(rpy[2]):.0f}] deg, solved 2-pose')
+            if len(ok) > 1:
+                print('\nothers that also fit (differ only in heading):')
+                for e, d, r in ok[1:4]:
+                    print(f'    [{r[0]:.4f}, {r[1]:.4f}, {r[2]:.4f}]  '
+                          f'level {math.degrees(e):.1f} deg')
+        else:
+            print('\nNO candidate satisfies both. Closest by level error:')
+            for e, d, r in closest:
+                print(f'    [{math.degrees(r[0]):4.0f},{math.degrees(r[1]):4.0f},'
+                      f'{math.degrees(r[2]):4.0f}] deg  level {math.degrees(e):5.1f}  '
+                      f'nose-down pitch {math.degrees(d):+6.1f}')
+            print('\nIf every nose-down pitch is NEGATIVE, you tilted the wrong\n'
+                  'way — nose-down means the FRONT goes toward the floor.\n'
+                  'If level errors are all large, the board is not mounted at a\n'
+                  '90-degree multiple and needs the one-pose calibration instead.')
+        rclpy.shutdown()
+        return 0
     print(f'listening on /imu for up to {a.timeout}s — hold the robot LEVEL '
           'and FORWARD, still...')
     quats = collect(node, a.samples, a.timeout)
