@@ -2,14 +2,19 @@ teleop_twist_joy_node:
   ros__parameters:
     axis_linear:
       x: 1
+    # REDUCED for first hardware drive 2026-08-01. Were 2.0 / 3.0 / 4.0 —
+    # Gazebo values. Full stick at 2.0 m/s commands a lean of
+    # a2*(0 - 2.0) = 0.3 rad, which IS max_lean: an instant 17 deg lean
+    # demand on a robot that has balanced for one session. Raise these
+    # deliberately, one at a time, once driving is boring.
     scale_linear:
-      x: 2.0
+      x: 0.3
     scale_linear_turbo:
-      x: 3.0
+      x: 0.5
     axis_angular:
       yaw: 0
     scale_angular:
-      yaw: 4.0
+      yaw: 0.8
     enable_button: 7
     enable_turbo_button: 5
     # plain Twist end-to-end: the balance controller subscribes geometry_msgs/Twist
