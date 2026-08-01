@@ -13,6 +13,9 @@
   <test_depend>python3-pytest</test_depend>
   <exec_depend>joy</exec_depend>
   <exec_depend>teleop_twist_joy</exec_depend>
+  <!-- launched by teleop.launch.py; was undeclared, so rosdep could not
+       install it and the Pi failed at launch on 2026-08-01 -->
+  <exec_depend>twist_mux</exec_depend>
   <exec_depend>rclpy</exec_depend>
   <exec_depend>std_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>
