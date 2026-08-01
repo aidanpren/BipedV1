@@ -41,7 +41,7 @@ balance_controller:
     # a constant disturbance into a constant ERROR rather than removing it.
     # Leaving this at 0.0 makes the robot station-keep at an offset of
     # pitch_trim/a1 = 0.05/-0.05 = ONE METRE from home, permanently.
-    pitch_trim: 0.08499753
+    pitch_trim: 0.08
 
     # MEASURED on hardware 2026-07-31:
     #     odrv0.axis0.motor.config.torque_constant = 0.43 Nm/A  (motor shaft)
