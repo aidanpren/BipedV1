@@ -30,7 +30,17 @@ balance_controller:
     # k3/k4 fixes it.
     # MEASURE: power off, balance the robot by hand on its wheels until it
     # neither wants to tip forward nor back, and read pitch from
-    # `python3 tools/imu_calibrate.py --watch`. Put that number here.
+    # `python3 tools/imu_calibrate.py --watch`.
+    # UNITS: --watch prints DEGREES, this field is RADIANS. DIVIDE BY 57.3.
+    # Expect +1 to +6 deg on the watch line => 0.02-0.10 here.
+    # It is live-tunable while balancing (`ros2 param set`), so measure by hand
+    # for a starting value, then nudge: drifts backward -> increase this.
+    #
+    # This is FEEDFORWARD of a known constant, not a gain. The outer loop
+    # cannot replace it: a1 is PROPORTIONAL on position, and a P term converts
+    # a constant disturbance into a constant ERROR rather than removing it.
+    # Leaving this at 0.0 makes the robot station-keep at an offset of
+    # pitch_trim/a1 = 0.05/-0.05 = ONE METRE from home, permanently.
     pitch_trim: 0.0
 
     # MEASURED on hardware 2026-07-31:

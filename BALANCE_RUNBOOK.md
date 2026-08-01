@@ -115,7 +115,8 @@ Watch the balance_controller log line: `pitch  x  v  L  R`.
 | catches, overshoots, catches worse | `k4` too low relative to `k3` | raise `k4` first |
 | sags and falls, wheels barely move | `k3` too low | `k3` up in steps of 5 |
 | holds ~5 s then diverges | usually `k4` | raise `k4` |
-| drifts steadily one way | residual mount tilt | re-run `--solve` |
+| drifts steadily one way, `pitch` log pinned near 0 | fore/aft imbalance | go to TEST 2A |
+| drifts one way AND won't sit level | residual mount tilt | re-run `--solve` |
 | wheels saturate instantly | `max_torque` too low for the gains | see note below |
 
 Change ONE gain at a time, by no more than ~50%, and restart terminal C:
@@ -176,38 +177,158 @@ Finally the joystick: `ros2 launch robot_teleop teleop.launch.py`.
 
 ---
 
-## THE BACK-HEAVY DRIFT — `pitch_trim`
+## TEST 2A — measure and apply `pitch_trim`
 
-If it drifts steadily one way and no `k3`/`k4` combination stops it, it is
-almost certainly not a tuning problem.
+_Written in the standard shape — see TEST_FORMAT.md._
 
-The equilibrium is where the CoM sits over the CONTACT PATCH, which is only
-"chassis level" if the robot is perfectly balanced fore and aft. Back-heavy
-means the chassis has to stand slightly NOSE-DOWN to put the mass over the
-wheels. Holding pitch = 0 instead leaves a constant gravity torque, and the
-only way to hold that angle is to accelerate backwards forever.
+**Proves:** that the robot's backward drift is a fore/aft imbalance, not a
+gain problem, by measuring the chassis angle at which the CoM sits over the
+contact patch and handing it to the inner loop.
 
-**Measure the trim:**
-1. Power the motors OFF.
-2. Balance the robot by hand on its wheels — find the angle where it does not
-   want to tip either way. Rock it gently to feel the null.
-3. Read pitch there:
-   ```bash
-   python3 tools/imu_calibrate.py --watch
-   ```
-4. Put that number in real.yaml as `pitch_trim` (POSITIVE = nose-down).
+**Rig:** Part 1 motors UNPOWERED, robot in your hands. Part 2 on the ground,
+tethered, legs collapsed, hands hovering. Same leg posture in both parts —
+the trim is a property of a posture, not of the robot.
 
-**Then re-run TEST 2.** The drift should stop with `a1`/`a2` still at zero,
-because the inner loop is now holding the actual equilibrium angle.
+**Abort:** `Ctrl-C` in terminal C. Torque stops publishing, `cmd_timeout: 0.5`
+fires in `odrive_bridge`, wheels COAST. Know where the physical power cut is.
 
-Sanity: for a robot this size expect a few degrees, i.e. 0.02-0.10 rad. If the
-number you measure is bigger than ~0.15 rad, the robot is very unbalanced and
-you would be better off moving the battery than trimming around it.
+**Prerequisites:** PRE-FLIGHT green, both safety gates green, TEST 1 (stand)
+passed. `balance_controller` must be the build that has `pitch_trim` — verify
+at runtime, step 0.
 
-Note the outer loop CAN hide this on its own — `a1` will command the needed
-lean — but only by carrying a permanent position error of `pitch_trim/a1`. It
-parks off-home with `a1` fighting gravity full time, which eats the authority
-you wanted for rejecting real disturbances.
+### Commands
+
+```bash
+# Get the code onto the Pi and rebuild — pitch_trim's clamp order changed.
+cd ~/BipedV1 && git pull && colcon build --packages-select robot_base robot_bringup
+source install/setup.bash
+```
+
+```bash
+# PRE-FLIGHT — the Pi loses CAN on every reboot
+ls /dev/ttyACM*
+sudo pkill -f slcand; sudo ip link delete can0 2>/dev/null; sleep 1
+sudo slcand -o -c -f -s6 /dev/ttyACM0 can0
+sudo ip link set up can0
+ip -br link show can0            # expect: can0  UP
+timeout 3 candump can0           # expect 001 021 041  (061 absent = left hip, fine)
+```
+
+**Part 1 — measure. Motors unpowered.**
+
+```bash
+# terminal B — IMU only. Do NOT start odrive_bridge: with no bridge the
+# ODrives stay in IDLE and the wheels spin freely, which is what you need.
+ros2 run robot_base imu_node --ros-args \
+  --params-file src/robot_bringup/config/real.yaml
+```
+```bash
+# terminal E — live attitude, in DEGREES
+python3 tools/imu_calibrate.py --watch
+```
+
+Balance the robot by hand on its wheels. Rock it gently and feel for the null
+— the angle where it does not want to tip either way. Read `pitch` there.
+Take three readings and average; you are looking for a stable number, not a
+precise one.
+
+**Convert: `--watch` prints DEGREES, `pitch_trim` is RADIANS. Divide by 57.3.**
+
+Write it into `src/robot_bringup/config/real.yaml` as `pitch_trim`.
+
+**Part 2 — apply. Ground, tethered.**
+
+```bash
+# 0. verify the running node actually has the parameter, before trusting it
+ros2 param get /balance_controller pitch_trim
+```
+```bash
+# terminal A
+ros2 run robot_base odrive_bridge --ros-args \
+  --params-file src/robot_bringup/config/real.yaml -p can_channel:=can0
+# terminal B
+ros2 run robot_base imu_node --ros-args \
+  --params-file src/robot_bringup/config/real.yaml
+# terminal C — a1/a2 zeroed so ONLY the inner loop + trim is under test
+ros2 run robot_base balance_controller --ros-args \
+  --params-file src/robot_bringup/config/real.yaml -p a1:=0.0 -p a2:=0.0
+# terminal D
+ros2 topic pub -r 2 /mode std_msgs/String "{data: 'teleop'}" \
+  --qos-durability transient_local
+```
+
+Live-tune without restarting — `pitch_trim` is re-read inside the IMU callback:
+```bash
+ros2 param set /balance_controller pitch_trim 0.05   # NOT 0 — bare int is rejected
+```
+
+### Expected
+
+| Action | Expected |
+|---|---|
+| hand-balanced, `--watch` | `pitch` steady at **+1 to +6 deg** |
+| trim applied, hands off | `pitch` in the log sits at your trim value, not 0.000 |
+| watch `x` in the log | wanders and coasts; does NOT pick a direction and build speed |
+| nudge it fore/aft | returns to the same pitch, drifts from wherever it ended up |
+| trim set too low | still drifts backward, slower |
+| trim set too high | drift reverses — it now runs forward |
+
+Tuning rule: **drifts backward -> increase `pitch_trim`.** 0.01 steps.
+
+### Failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| lurches backward hard the instant mode goes teleop | you pasted DEGREES into a radians field | divide by 57.3 |
+| `pitch_trim` not a parameter | Pi running the old build | `git pull && colcon build`, re-source |
+| constant slow creep that never accelerates | NOT the trim — dragging wheel or torque offset | check both wheels spin equally free by hand |
+| drift direction flips run to run | you are reading a null that isn't there | re-check legs are collapsed and equally so |
+| `pitch` log won't settle near trim at all | `k3`/`k4` wrong, not trim | back to TEST 2 gain tuning first |
+| measured trim > 0.15 rad (8.6 deg) | robot is genuinely badly balanced | move the battery, don't trim around it |
+
+### Why this works
+
+The equilibrium is where the CoM sits over the CONTACT PATCH, which equals
+"chassis level" only if the robot is balanced fore and aft. Back-heavy means
+it must stand slightly NOSE-DOWN to put the mass over the wheels. Hold
+pitch = 0 instead and gravity applies a constant torque about the contact
+point; the only way to sustain that angle is to accelerate backwards forever,
+at roughly `g * trim` ≈ 0.5 m/s². No `k3`/`k4` fixes it, because it is a bias,
+not a gain.
+
+The measurement is valid because both programs compute pitch identically —
+`asin(2*(w*y - z*x))` on the same `/imu` quaternion, in
+`balance_controller.py` and `imu_calibrate.py` alike. `--watch` is not a
+similar angle; it is bit-for-bit the number the loop subtracts the trim from.
+If either formula ever changes, this procedure silently stops being valid.
+
+With `a1`/`a2` at zero the trim removes the ACCELERATION, not the motion:
+nothing is regulating position or velocity yet, so it will still wander. The
+signature of success is that it stops *running away*, not that it stops moving.
+
+`pitch_trim` is FEEDFORWARD of a known constant; the outer loop is FEEDBACK
+against unknown ones. They are not alternatives. `a1` is proportional on
+position, and a P term converts a constant disturbance into a constant ERROR
+rather than removing it — leaving the trim at 0.0 makes the robot station-keep
+at `pitch_trim/a1` = 0.05/-0.05 = **one metre** from home, permanently, and
+drive `pitch_trim/a2` = **0.33 m/s** slower than commanded, forever. Ask for
+0.2 m/s forward and it rolls backward. The trim also covers the one second
+after recovery when the outer loop is deliberately switched off
+(`if not settled: pitch_target = 0.0`) — the most fragile second there is.
+
+### Pass criteria
+
+- Hand-measured trim lands in **0.02–0.10 rad** and repeats within ~1 deg.
+- With trim applied and `a1`/`a2` at zero, the robot holds upright unaided for
+  **30 s** without accelerating in one direction.
+- Logged `pitch` sits at the trim value, not at 0.000.
+
+### On pass
+
+Record the measured value in `real.yaml` with the date and how it was
+measured. Then TEST 3 — and cross-check there: the steady pitch the outer
+loop parks at is this same number, arrived at by the robot instead of by hand.
+If they disagree by much, one of the two measurements is wrong.
 
 ---
 

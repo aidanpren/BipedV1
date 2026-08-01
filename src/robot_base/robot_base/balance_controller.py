@@ -121,8 +121,14 @@ class BalanceController:
             # position error of pitch_trim/a1 — it would sit parked off home,
             # leaning, with a1 fighting gravity full time. Stating the trim
             # explicitly frees the outer loop to handle actual disturbances.
-            pitch_target += self.node.get_parameter('pitch_trim').value
+            #
+            # CLAMP FIRST, then trim. max_lean bounds how far the OUTER LOOP
+            # may lean the robot away from its equilibrium — and equilibrium is
+            # pitch_trim, not zero. Clamping the sum instead would make the
+            # authority asymmetric: at trim 0.05 and max_lean 0.3 the outer loop
+            # could lean 0.25 one way and 0.35 the other, for no stated reason.
             pitch_target = max(-max_lean, min(max_lean, pitch_target))
+            pitch_target += self.node.get_parameter('pitch_trim').value
 
             # balance (common) + steering (differential)
             # SIGN verified empirically in headless Gazebo (2026-07-13): the
