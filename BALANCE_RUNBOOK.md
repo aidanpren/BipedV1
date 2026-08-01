@@ -139,41 +139,298 @@ faster and generally wants more damping (`k4`) than Gazebo did.
 
 ## TEST 3 — outer loop (station keeping)
 
-Once it holds upright unaided for ~30 s, restore the outer loop:
+_Standard shape — see TEST_FORMAT.md._
+
+**Proves:** that the outer loop closes the free velocity integrator TEST 2A
+left open, so the robot holds a SPOT rather than just an ANGLE — and, as a
+by-product, independently re-measures `pitch_trim`.
+
+**Rig:** ground, tethered, legs collapsed, hands hovering. Clear **2 m in
+front and behind** — it may lurch once before it settles.
+
+**Abort:** `Ctrl-C` in terminal C -> `cmd_timeout` fires -> wheels COAST.
+
+**Prerequisites:** TEST 2A passed — trim measured, and the robot holds 30 s
+without accelerating in one direction.
+
+### Commands
+
+PRE-FLIGHT as usual (the Pi loses CAN on reboot), then:
 
 ```bash
+# terminal A
+ros2 run robot_base odrive_bridge --ros-args \
+  --params-file src/robot_bringup/config/real.yaml -p can_channel:=can0
+# terminal B
+ros2 run robot_base imu_node --ros-args \
+  --params-file src/robot_bringup/config/real.yaml
+# terminal C — NOTE: no a1/a2 override this time, they come from the file
 ros2 run robot_base balance_controller --ros-args \
-  --params-file src/robot_bringup/config/real.yaml     # a1/a2 from the file
+  --params-file src/robot_bringup/config/real.yaml
+# terminal D
+ros2 topic pub -r 2 /mode std_msgs/String "{data: 'teleop'}" \
+  --qos-durability transient_local
 ```
 
-`a1: -0.05` pulls it back toward `x_home`, `a2: -0.15` damps velocity. Together
-they stop the wandering by commanding a small lean.
+```bash
+# VERIFY AT RUNTIME that the overrides are actually gone. This is the whole
+# point of the test and it is one habit-slip away from silently not running.
+ros2 param get /balance_controller a1          # expect -0.05, NOT 0.0
+ros2 param get /balance_controller a2          # expect -0.15, NOT 0.0
+ros2 param get /balance_controller pitch_trim  # expect 0.085
+```
 
-| Expected | Wrong |
+Live-tune without restarting. **`a1` and `a2` are NEGATIVE — make them more
+negative to strengthen them. Never make them positive:** positive a1/a2 is the
+saturated-lean runaway documented at balance_controller.py:19.
+```bash
+ros2 param set /balance_controller a1 -0.075   # 50% stronger position pull
+ros2 param set /balance_controller a2 -0.20    # 33% stronger velocity damping
+```
+
+### Expected
+
+| Action | Expected |
 |---|---|
-| returns to roughly one spot | slow drift away = `a1` too small |
-| gentle lean when nudged, then recovers | lurching / wind-up = `a1` too big |
-| settles within a couple of seconds | endless slow rocking = `a2` too small |
+| mode goes teleop, hands off | balances; outer loop is OFF for the first 1 s by design |
+| **at ~1 s** | a small step or lean as the outer loop engages — expected, not a fault |
+| after a few seconds | settles; `v` decays toward 0 instead of coasting |
+| logged `x` | returns toward `x_home` and stays within ~0.2 m |
+| logged `pitch` | settles at **~+0.085**, i.e. your trim |
+| push it gently fore/aft | leans against you, recovers, returns to about the same spot |
+| leave it 60 s | still there, still upright |
 
-`max_lean: 0.3` clamps the commanded lean, so a bad outer loop tips slowly
-rather than snapping over.
+### Failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| drifts away slowly, never returns | `a1` too weak | `a1` -0.05 -> -0.075 |
+| lurching, wind-up, overshoots home | `a1` too strong | back `a1` off toward -0.03 |
+| endless slow rocking about home | `a2` too weak | `a2` -0.15 -> -0.20 |
+| parks consistently off home by a fixed distance | residual trim error | use the formula below |
+| small stop-start hunting around home | stiction, not tuning | expected at low speed; nudge `a2` up, or accept |
+| snaps over hard when the outer loop engages | `a1` badly wrong, or sign flipped | check `a1` is NEGATIVE |
+| behaves exactly like TEST 2A | overrides still applied | re-check `ros2 param get a1` |
+
+### The trim cross-check (the second measurement)
+
+At steady state `a1*(x - x_home) + trim = θ_true`, so a persistent parking
+offset `d = x - x_home` is a direct readout of how wrong the trim is:
+
+```
+trim_correction = a1 * d          (a1 = -0.05)
+new_trim = trim + a1 * d
+```
+
+Parks 0.2 m BEHIND home -> `d = -0.2` -> correction `+0.01` -> raise trim to
+0.095. Same direction as the TEST 2A rule (drifts backward -> more trim), but
+now quantitative, and measured by the robot rather than by your hands. If this
+disagrees with the hand measurement by more than ~0.02 rad, one of the two is
+wrong — do not just average them.
+
+### Why this works
+
+TEST 2A left wheel velocity as an unforced free integrator: the law regulated
+pitch and nothing read `x` or `v`. `a2` closes the loop on `v` directly, which
+is what stops the coast. `a1` closes it on position, which is what brings it
+home. Both work by commanding a small LEAN — the robot has no way to push
+itself sideways except by falling in the direction it wants to go and catching
+itself further along.
+
+The 1 s dead time is `upright_since` in balance_controller.py: the outer loop
+is deliberately suppressed until the robot has been upright for a second, so
+position feedback cannot fight a recovery mid-tumble. `pitch_trim` is applied
+throughout, including during that second — which is why the trim had to be
+right before this test could mean anything.
+
+`max_lean: 0.3` bounds the outer loop's lean command around the trim (clamp
+applied BEFORE the trim is added, so the authority is symmetric), which makes
+a badly tuned outer loop tip slowly instead of snapping over.
+
+### Pass criteria
+
+- Returns to within **0.2 m** of where you released it, and stays.
+- Survives a deliberate fore/aft nudge and comes back.
+- **60 s** unaided.
+- Steady `pitch` equals `pitch_trim` within ~0.02 rad.
+
+### On pass
+
+Write the tuned `a1`/`a2` into real.yaml **with a comment saying why**, apply
+any trim correction from the cross-check, then TEST 4.
 
 ---
 
-## TEST 4 — driving
+## TEST 4 — driving (translation, then yaw)
+
+_Standard shape — see TEST_FORMAT.md._
+
+**Proves:** that the robot tracks a commanded velocity and a commanded yaw
+rate while staying balanced — and it is the FIRST test of the differential
+(yaw) sign, which gate 2 never checked.
+
+**Rig:** ground, tethered with SLACK, legs collapsed. Clear **3 m of runway**
+plus room to spin. Hands off but following it.
+
+**Abort:** `Ctrl-C` terminal C (wheels coast). To stop it driving without
+stopping balance, `Ctrl-C` the `cmd_vel` publisher only — the watchdog zeros
+the reference in 0.5 s and it keeps balancing. That is TEST 5.
+
+**Prerequisites:** TEST 3 passed — holds station 60 s, returns after a nudge.
+
+### Commands
+
+Same four terminals as TEST 3, plus a fifth for commands.
 
 ```bash
+# terminal E — forward, gently
 ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist \
   "{linear: {x: 0.2}, angular: {z: 0.0}}"
 ```
-Forward should mean the robot leans slightly forward, then rolls. Stop
-publishing and the watchdog zeros the reference after 0.5 s — it keeps
-BALANCING, it does not cut torque. That is the safety invariant; verify it
-deliberately once.
+```bash
+# then backward
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist \
+  "{linear: {x: -0.2}, angular: {z: 0.0}}"
+```
+```bash
+# yaw — START LOW, this sign has never been tested on hardware
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist \
+  "{linear: {x: 0.0}, angular: {z: 0.3}}"
+```
+```bash
+# finally the joystick
+ros2 launch robot_teleop teleop.launch.py
+```
 
-Then yaw: `angular: {z: 0.5}`. `k_yaw: 4.0` splits torque between the wheels.
+### Expected
 
-Finally the joystick: `ros2 launch robot_teleop teleop.launch.py`.
+| Action | Expected |
+|---|---|
+| command +0.2 m/s | **wheels first roll BACKWARD ~0.2 s**, robot pitches nose-down, THEN drives forward |
+| once up to speed | `pitch` returns to ~`pitch_trim`; `v` settles at **0.2**, not 0.13 or 0.26 |
+| command −0.2 m/s | mirror image: brief forward twitch, leans back, drives backward |
+| stop publishing | leans back to decelerate, stops, resumes holding station |
+| `angular.z: 0.3` | spins in place, **counter-clockwise seen from above**, roughly constant rate |
+| `angular.z: -0.3` | clockwise |
+| joystick | same behaviours, proportional to stick |
+
+### Failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| rolls backward and KEEPS going on a +0.2 command | wrong `invert_*` — but see below, this is NOT the brief backstep | STOP; re-run gate 2 |
+| steady speed consistently offset from commanded | residual `pitch_trim` error | `offset = trim_error/a2`; re-check TEST 3 cross-check |
+| yaw rate runs away to full speed on a small command | differential sign inverted — positive feedback on yaw | STOP; swap the `t_yaw` sign convention |
+| turns the wrong way but at a controlled rate | yaw sign convention, harmless | negate `k_yaw` or fix the sign |
+| tips over on the velocity step | `a2` too strong; the lean command is too aggressive | reduce `a2` magnitude |
+| drives fine, wanders when stopped | expected — `x_home` follows while driving |  |
+
+### Why this works
+
+**The backstep is real and correct.** A wheeled inverted pendulum is
+non-minimum phase: to accelerate forward it must first put its body ahead of
+its wheels, and the only way to do that is to drive the wheels BACKWARD for a
+moment. Watch the math — on a +0.2 command,
+`pitch_target = a2*(v_f - v_ref) + trim` = `-0.15*(0 - 0.2) + 0.085` = `0.115`,
+which is MORE nose-down than the current 0.085, so
+`torque = k3*(0.085 - 0.115)` is NEGATIVE. It backs up on purpose.
+
+That is also how you tell it from a wrong `invert_*`: the backstep is brief
+(~0.2 s) and REVERSES. A sign error diverges and never comes back.
+
+**Steady-state speed is exact because the trim is right.** At constant
+velocity `pitch` must equal `θ_eq`, so `a2*(v_f - v_ref)` must be zero, so
+`v_f = v_ref`. Untrimmed it would have settled `trim/a2` = `0.085/-0.15` =
+**0.57 m/s** slow — a +0.2 command would have driven it BACKWARD at 0.37 m/s,
+which is why this test was worthless before TEST 2A.
+
+**Yaw is genuinely unverified.** Gate 2 drove both wheels with `[0.5, 0.5]`,
+which only ever tested COMMON mode. `left = torque - t_yaw` /
+`right = torque + t_yaw` is DIFFERENTIAL and has never had current through it
+in that configuration. It is also a RATE loop, `k_yaw*(yaw_ref - ω_z)`, so a
+flipped sign is positive feedback and spins up rather than merely turning the
+wrong way. Start at 0.3, not 0.5.
+
+### Pass criteria
+
+- Forward and backward both track within ~20% of commanded steady speed.
+- Stays upright through every start and stop.
+- Yaw turns the commanded direction at a controlled, bounded rate.
+- Joystick reproduces all of it.
+
+### On pass
+
+Record anything retuned. Then TEST 5 — the safety invariant.
+
+---
+
+## TEST 5 — the cmd_vel watchdog (safety invariant)
+
+**Proves:** that losing `cmd_vel` zeros the velocity reference and **KEEPS
+BALANCING** — it does not cut torque. This is the non-negotiable invariant
+from CLAUDE.md and it has never been verified on hardware.
+
+**Rig:** ground, tethered, hands close. It should NOT fall — that is the
+point — but be ready for the case where it does.
+
+**Abort:** `Ctrl-C` terminal C.
+
+**Prerequisites:** TEST 4 passed.
+
+### Commands
+
+```bash
+# drive it, then kill ONLY the publisher — leave A/B/C/D running
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist "{linear: {x: 0.2}}"
+# ... let it reach speed, then Ctrl-C THIS terminal only
+```
+```bash
+# harsher version: yank the network / kill the joystick node mid-drive
+ros2 launch robot_teleop teleop.launch.py     # then Ctrl-C it while moving
+```
+
+### Expected
+
+| Action | Expected |
+|---|---|
+| publisher stops | within 0.5 s the robot decelerates smoothly to a stop |
+| after stopping | **still upright, still actively balancing**, holding station |
+| terminal C log | torque values keep updating — they do NOT go to 0.0 and stay |
+| push it after the timeout | it still resists and recovers |
+
+### Failure modes
+
+| Symptom | Cause | Severity |
+|---|---|---|
+| torque goes to zero and it DROPS | watchdog wired to cut torque instead of zeroing refs | **CRITICAL** — this is the invariant |
+| keeps driving at 0.2 forever | watchdog not firing; check `cmd_timeout` reaches the node | serious — runaway |
+| stops but then drifts off | expected only if `a1`/`a2` regressed | check params |
+
+### Why this works
+
+Three behaviours must never be merged, and this test isolates the first:
+1. **Stale `cmd_vel`** -> zero the velocity references, KEEP BALANCING.
+2. **DISABLED mode** -> deliberately cut torque, only ever from an explicit
+   command, because it drops the robot.
+3. **Stale wheel torque** (`odrive_bridge`, `cmd_timeout: 0.5`) -> COAST,
+   because the controller itself has died and there is nothing left to
+   balance with.
+
+The watchdog under test is #1, in `balance_controller`: `age > 0.5` sets
+`v_ref`/`yaw_ref` to zero and then falls through into the normal balance law.
+Note that #3 has the same 0.5 s timeout but a completely different meaning —
+do not let them blur together.
+
+### Pass criteria
+
+- Robot remains upright and balancing indefinitely after cmd_vel stops.
+- Torque continues to be published and to respond to pushes.
+
+### On pass
+
+Balance bring-up is complete. Move to the backlog: left hip on CAN, IMU to
+UART, slcand under systemd, and friction feedforward for the standstill
+stiction hunting.
 
 ---
 
@@ -342,3 +599,14 @@ If they disagree by much, one of the two measurements is wrong.
 3. **`slcand` in systemd** so CAN survives a reboot — required for the
    "powers on and balances" goal.
 4. **Write the tuned gains into real.yaml** and record why.
+5. **Friction feedforward** for the standstill hunting. Observed at TEST 3
+   (2026-08-01): station keeping holds, but the robot rocks slightly back and
+   forth about home. That is a stiction limit cycle, not a tuning fault —
+   through the 8:1 gearbox, breakaway torque is large enough that small
+   corrections do nothing until they suddenly do, and the robot cannot sit
+   inside the deadband because a locked-wheel inverted pendulum is unstable.
+   More `a2` will not fix it and may amplify it. The proper fix is the
+   friction-feedforward term from the LQR reference paper: add a torque of
+   `sign(v) * f_c` (plus a viscous term) so the loop starts from the edge of
+   the deadband rather than the middle of it. Standstill-only — it does not
+   appear once the wheels are turning.

@@ -18,8 +18,8 @@ balance_controller:
     # robot has different mass distribution, real friction, and IMU noise.
     k3: 20.0
     k4: 2.0
-    a1: -0.05
-    a2: -0.15
+    a1: -0.09
+    a2: -0.3
     k_yaw: 4.0
     max_lean: 0.3
 
