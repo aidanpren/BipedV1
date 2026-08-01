@@ -8,13 +8,13 @@ teleop_twist_joy_node:
     # demand on a robot that has balanced for one session. Raise these
     # deliberately, one at a time, once driving is boring.
     scale_linear:
-      x: 0.3
+      x: 0.15
     scale_linear_turbo:
-      x: 0.5
+      x: 0.3
     axis_angular:
       yaw: 0
     scale_angular:
-      yaw: 0.8
+      yaw: 0.5
     enable_button: 7
     enable_turbo_button: 5
     # plain Twist end-to-end: the balance controller subscribes geometry_msgs/Twist

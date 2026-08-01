@@ -9,12 +9,19 @@ def generate_launch_description():
         Node(
             package='joy',
             executable='joy_node',
+            # output='screen' is NOT cosmetic: joy_node reports "Couldn't open
+            # joystick" when no pad is connected, and the launch default of
+            # output='log' hides it in a file. The symptom is then a silent
+            # /joy_vel with no error anywhere you are looking. Cost an hour on
+            # 2026-08-01.
+            output='screen',
             parameters=[{
                 # NO device_name: joy's name-matching is broken here (fails even
                 # against the exact joy_enumerate_devices string). Default
                 # device_id 0 is unambiguous — SDL only enumerates the pad on
                 # this machine (the js0 accelerometer isn't an SDL device).
                 'autorepeat_rate': 20.0,
+                'deadzone': 0.12
             }],
         ),
         Node(
@@ -27,6 +34,7 @@ def generate_launch_description():
                     'teleop_twist_joy.yaml'
                 )
             ],
+            output='screen',
             remappings=[('cmd_vel', 'joy_vel')]
         ),
         Node(
@@ -38,6 +46,7 @@ def generate_launch_description():
                     'config',
                     'twist_mux.yaml')
             ],
+            output='screen',
             remappings=[('cmd_vel_out', 'cmd_vel')]
         ),
         # right-stick -> leg height. Publishes /leg_position_cmd (turns), the
