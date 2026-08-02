@@ -34,10 +34,20 @@ def generate_launch_description():
                     'slcand names it can0 on the Pi. NOTE this default is '
                     'applied as an override BELOW the YAML, so it wins over '
                     'real.yaml — the two must agree or the file loses.')
+    # THIS DEFAULT MUST MATCH HOW THE SENSOR IS PHYSICALLY WIRED, because the
+    # override dict below WINS over real.yaml. It used to say 'uart' — the
+    # aspiration — while the board is wired I2C, so every bare launch (which
+    # is every systemd boot: BIPED_LAUNCH_ARGS is empty) pointed imu_node at
+    # a serial port nothing is connected to. The port opens, nothing answers,
+    # and the first standalone boot (2026-08-02) came up with every service
+    # healthy and the robot deaf. Debugging burned an hour on clock-stretch
+    # and systemd theories; `ros2 param get /imu_node driver` would have
+    # answered in one line. Change this to 'uart' only WHEN THE REWIRE
+    # ACTUALLY HAPPENS, in the same commit as real.yaml's driver field.
     imu_driver = DeclareLaunchArgument(
-        'imu_driver', default_value='uart',
+        'imu_driver', default_value='i2c',
         description='BNO085 interface: uart | spi | i2c, or fake to dry-run. '
-                    'I2C is unreliable on a Pi (clock stretching).')
+                    'MUST match the physical wiring — this beats the YAML.')
     # DEFAULT FALSE, deliberately (2026-08-02). The wheeled-biped goal —
     # turn on, pad on, press a button, drive — does not involve the legs at
     # all: balance_controller contains no leg references and the hips are a
