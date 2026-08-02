@@ -140,10 +140,20 @@ faster and generally wants more damping (`k4`) than Gazebo did.
 ## TEST 3 — outer loop (station keeping)
 
 _Standard shape — see TEST_FORMAT.md._
+_REVISED 2026-08-01 for the unified control law and the `a1`/`a2` retune.
+The old expected values (-0.05/-0.15) and the old "rocking -> raise `a2`"
+advice are superseded — see the failure-mode table._
 
 **Proves:** that the outer loop closes the free velocity integrator TEST 2A
 left open, so the robot holds a SPOT rather than just an ANGLE — and, as a
 by-product, independently re-measures `pitch_trim`.
+
+**What this test actually exercises now.** With no `cmd_vel` publisher running,
+`v_cmd` stays at zero, and at `v_cmd = 0` the new unified law collapses to
+*exactly* the old station-keeping law — verified numerically, max difference
+0.00e+00 rad. So this is no longer a test of the rewrite. It is a test of the
+**retune**, `a1/a2` from -0.09/-0.3 to -0.07/-0.15, plus one genuinely new
+behaviour: the `max_pos_error` clamp.
 
 **Rig:** ground, tethered, legs collapsed, hands hovering. Clear **2 m in
 front and behind** — it may lurch once before it settles.
@@ -151,7 +161,9 @@ front and behind** — it may lurch once before it settles.
 **Abort:** `Ctrl-C` in terminal C -> `cmd_timeout` fires -> wheels COAST.
 
 **Prerequisites:** TEST 2A passed — trim measured, and the robot holds 30 s
-without accelerating in one direction.
+without accelerating in one direction. **TEST 6 passed** — the Pi is on the new
+build and the reference shaping behaves. If you skipped TEST 6, the runtime
+parameter check below is the part of it you cannot skip.
 
 ### Commands
 
@@ -175,18 +187,39 @@ ros2 topic pub -r 2 /mode std_msgs/String "{data: 'teleop'}" \
 ```bash
 # VERIFY AT RUNTIME that the overrides are actually gone. This is the whole
 # point of the test and it is one habit-slip away from silently not running.
-ros2 param get /balance_controller a1          # expect -0.05, NOT 0.0
-ros2 param get /balance_controller a2          # expect -0.15, NOT 0.0
-ros2 param get /balance_controller pitch_trim  # expect 0.085
+ros2 param get /balance_controller a1             # expect -0.07, NOT 0.0, NOT -0.09
+ros2 param get /balance_controller a2             # expect -0.15, NOT 0.0, NOT -0.3
+ros2 param get /balance_controller pitch_trim     # expect 0.08
+ros2 param get /balance_controller max_pos_error  # expect 0.25
+ros2 param get /balance_controller jerk_tau       # errors => OLD BUILD, stop
 ```
 
-Live-tune without restarting. **`a1` and `a2` are NEGATIVE — make them more
-negative to strengthen them. Never make them positive:** positive a1/a2 is the
-saturated-lean runaway documented at balance_controller.py:19.
-```bash
-ros2 param set /balance_controller a1 -0.075   # 50% stronger position pull
-ros2 param set /balance_controller a2 -0.20    # 33% stronger velocity damping
+Live-tune without restarting. **`a1` and `a2` are NEGATIVE — more negative is
+stronger. Never make them positive:** positive a1/a2 is the saturated-lean
+runaway documented at balance_controller.py:19.
+
+**They are NOT independent knobs.** The outer loop is second order:
+
 ```
+omega_n = sqrt(g*|a1|)          zeta = (|a2|/2) * sqrt(g/|a1|)
+```
+
+so changing `a1` alone changes the damping ratio too. If you strengthen the
+position pull, strengthen the damping with it:
+
+```bash
+# a matched pair — omega_n up ~20%, zeta held near 0.9
+ros2 param set /balance_controller a1 -0.10
+ros2 param set /balance_controller a2 -0.18
+```
+
+**Do not raise `|a2|` past about -0.20 to cure rocking.** That was the old
+advice and it is backwards. `g*|a2|` is the driving-loop bandwidth, and the
+non-minimum-phase ceiling for this robot is roughly 1.6 rad/s, i.e. `|a2|`
+around 0.16. -0.3 sits at nearly twice that, and offline sim of this exact
+code showed it ringing at standstill — 48 direction reversals, never settling
+inside 20 s — even though the lag-free `zeta` formula calls it overdamped
+(1.57). The formula is optimistic because it ignores inner-loop and filter lag.
 
 ### Expected
 
@@ -196,21 +229,27 @@ ros2 param set /balance_controller a2 -0.20    # 33% stronger velocity damping
 | **at ~1 s** | a small step or lean as the outer loop engages — expected, not a fault |
 | after a few seconds | settles; `v` decays toward 0 instead of coasting |
 | logged `x` | returns toward `x_home` and stays within ~0.2 m |
-| logged `pitch` | settles at **~+0.085**, i.e. your trim |
+| logged `pitch` | settles at **~+0.08**, i.e. your trim |
 | push it gently fore/aft | leans against you, recovers, returns to about the same spot |
 | leave it 60 s | still there, still upright |
+| **standstill rocking vs last session** | **noticeably less**, or gone — this is the headline prediction of the retune |
+| logged `err` | stays small; **never exceeds ±0.25** (the new clamp) |
+| shove it more than 0.25 m | still returns, but the pull no longer grows with distance — constant authority beyond the clamp, so the last part of the trip is slower |
 
 ### Failure modes
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| drifts away slowly, never returns | `a1` too weak | `a1` -0.05 -> -0.075 |
-| lurching, wind-up, overshoots home | `a1` too strong | back `a1` off toward -0.03 |
-| endless slow rocking about home | `a2` too weak | `a2` -0.15 -> -0.20 |
+| drifts away slowly, never returns | `a1` too weak | `a1` -0.07 -> -0.10, and `a2` -0.15 -> -0.18 with it |
+| lurching, wind-up, overshoots home | `a1` too strong | back BOTH off: `a1` -0.05, `a2` -0.13 |
+| **endless slow rocking about home** | **ambiguous — two opposite causes.** Either `a2` too weak (underdamped) or `a2` too STRONG (lag-limited ringing, which is what -0.3 was doing) | **Test which: drop `a2` to -0.10.** Worse => it was too weak, go to -0.18. Better => it was too strong, stay low. Do NOT reflexively raise it |
 | parks consistently off home by a fixed distance | residual trim error | use the formula below |
-| small stop-start hunting around home | stiction, not tuning | expected at low speed; nudge `a2` up, or accept |
+| small stop-start hunting around home, wheels visibly sticking | stiction, not tuning | expected; backlog item 5 (friction feedforward). More `a2` will not fix it and may amplify it |
+| returns from a big shove but crawls the last stretch | `max_pos_error` clamp — working as designed | none; raise `max_pos_error` only if you have a reason |
+| `err` grows past 0.25 | clamp not working — **stop, do not drive** | this is the runaway guard; report it |
 | snaps over hard when the outer loop engages | `a1` badly wrong, or sign flipped | check `a1` is NEGATIVE |
 | behaves exactly like TEST 2A | overrides still applied | re-check `ros2 param get a1` |
+| behaves exactly like LAST session (same rocking) | Pi on the old build | `ros2 param get jerk_tau` — if it errors, rebuild |
 
 ### The trim cross-check (the second measurement)
 
@@ -218,15 +257,21 @@ At steady state `a1*(x - x_home) + trim = θ_true`, so a persistent parking
 offset `d = x - x_home` is a direct readout of how wrong the trim is:
 
 ```
-trim_correction = a1 * d          (a1 = -0.05)
+trim_correction = a1 * d          (a1 = -0.07)
 new_trim = trim + a1 * d
 ```
 
-Parks 0.2 m BEHIND home -> `d = -0.2` -> correction `+0.01` -> raise trim to
-0.095. Same direction as the TEST 2A rule (drifts backward -> more trim), but
+Parks 0.2 m BEHIND home -> `d = -0.2` -> correction `+0.014` -> raise trim to
+0.094. Same direction as the TEST 2A rule (drifts backward -> more trim), but
 now quantitative, and measured by the robot rather than by your hands. If this
 disagrees with the hand measurement by more than ~0.02 rad, one of the two is
 wrong — do not just average them.
+
+**The formula is only valid for `|d| < max_pos_error` (0.25 m).** Past the
+clamp, `x_home` is dragged along behind the robot, `a1*(x - x_home)` stops
+growing, and the offset no longer reads out the trim error — it reads out the
+clamp. A parking offset pinned at almost exactly 0.25 m is that, not a trim
+measurement.
 
 ### Why this works
 
@@ -247,17 +292,38 @@ right before this test could mean anything.
 applied BEFORE the trim is added, so the authority is symmetric), which makes
 a badly tuned outer loop tip slowly instead of snapping over.
 
+**`max_pos_error` is the one new mechanism here.** `x_home` is now an
+integrator — it ramps at `v_cmd` — and an unbounded integrator against a robot
+that cannot keep up is a wind-up trap: hold the robot still while it wants to
+move and the reference walks away, storing distance the robot will sprint to
+recover the moment you let go. Clamping `x_home` to within 0.25 m of `x` bounds
+that. The side effect you will feel is that beyond 0.25 m the restoring pull
+stops growing with distance — `a1 * 0.25` = 0.0175 rad of lean, about
+0.17 m/s² — so a big shove comes home under constant rather than proportional
+authority. That is the intended trade: slower recovery from a large
+displacement, in exchange for no runaway.
+
 ### Pass criteria
 
 - Returns to within **0.2 m** of where you released it, and stays.
 - Survives a deliberate fore/aft nudge and comes back.
 - **60 s** unaided.
 - Steady `pitch` equals `pitch_trim` within ~0.02 rad.
+- Logged `err` never exceeds ±0.25.
+- **Standstill rocking is no worse than last session.** Better is the
+  prediction; equal is acceptable; worse means the retune hurt and you should
+  say so rather than tune around it.
 
 ### On pass
 
 Write the tuned `a1`/`a2` into real.yaml **with a comment saying why**, apply
 any trim correction from the cross-check, then TEST 4.
+
+Record the rocking result explicitly, either way. The sim claims the standstill
+rocking was largely outer-loop ringing from `a2 = -0.3` rather than stiction.
+If it improved, backlog item 5 (friction feedforward) shrinks. If it did not,
+the stiction diagnosis stands and item 5 is still the real fix — that is a
+useful measurement, not a failed test.
 
 ---
 
@@ -586,6 +652,215 @@ Record the measured value in `real.yaml` with the date and how it was
 measured. Then TEST 3 — and cross-check there: the steady pitch the outer
 loop parks at is this same number, arrived at by the robot instead of by hand.
 If they disagree by much, one of the two measurements is wrong.
+
+---
+
+## TEST 6 — stand, the rewritten law and reference shaping
+
+_Standard shape — see TEST_FORMAT.md. Written 2026-08-01, after the control
+law was unified and `a1`/`a2` retuned._
+
+**Proves:** that the rewritten `balance_controller` is safe to put back on the
+ground — the inner loop still behaves exactly as it did, the new reference
+shaping ramps `v_cmd` smoothly instead of stepping, and the anti-windup clamp
+actually bounds the reference position.
+
+**Rig:** stand, **wheels OFF the ground**, robot sitting roughly UPRIGHT on the
+stand (see below — this matters). Legs collapsed. No tether needed; it cannot
+go anywhere.
+
+**Abort:** `Ctrl-C` in terminal C. Torque stops publishing, `cmd_timeout: 0.5`
+fires in `odrive_bridge`, wheels COAST. In Parts 2 and 3 the controller cannot
+command torque at all, so there is nothing to abort from.
+
+**Prerequisites:** TEST 3, 4 and 5 previously passed on the OLD code. This test
+re-qualifies the new code before it goes back to the ground; it does not
+replace them.
+
+**Why upright matters:** `|pitch| > cutoff_pitch` (0.7 rad) takes the fallen
+branch, which resets `v_cmd` and `v_ramp` to zero every cycle. Lie the robot
+over on the stand and Part 2 reads as a dead ramp for a reason that has
+nothing to do with the ramp.
+
+### Commands
+
+```bash
+# Get the new code onto the Pi. The .py changed, so this MUST be rebuilt —
+# unlike the yaml, which is read from source by --params-file.
+cd ~/BipedV1 && git pull
+colcon build --packages-select robot_base robot_bringup
+source install/setup.bash
+```
+
+PRE-FLIGHT as usual (the Pi loses CAN on reboot), then:
+
+**Part 0 — verify the build at RUNTIME. This is the gate.**
+
+```bash
+# terminal A
+ros2 run robot_base odrive_bridge --ros-args \
+  --params-file src/robot_bringup/config/real.yaml -p can_channel:=can0
+# terminal B
+ros2 run robot_base imu_node --ros-args \
+  --params-file src/robot_bringup/config/real.yaml
+# terminal C
+ros2 run robot_base balance_controller --ros-args \
+  --params-file src/robot_bringup/config/real.yaml
+# terminal D
+ros2 topic pub -r 2 /mode std_msgs/String "{data: 'teleop'}" \
+  --qos-durability transient_local
+```
+
+```bash
+# terminal E — every one of these must return a value, not an error.
+# An error on ANY of them means the Pi is running the OLD build. Stop here.
+ros2 param get /balance_controller jerk_tau        # 0.15   <- new, check first
+ros2 param get /balance_controller accel_limit     # 0.3
+ros2 param get /balance_controller accel_to_lean   # 0.102
+ros2 param get /balance_controller max_pos_error   # 0.25
+ros2 param get /balance_controller v_filter_tau    # 0.06
+ros2 param get /balance_controller wheel_radius    # 0.105
+ros2 param get /balance_controller cutoff_pitch    # 0.7
+ros2 param get /balance_controller a1              # -0.07  <- RETUNED
+ros2 param get /balance_controller a2              # -0.15  <- RETUNED
+ros2 param get /balance_controller pitch_trim      # 0.08
+```
+
+**Part 1 — inner loop regression. Did the rewrite change anything it shouldn't?**
+
+Restart terminal C with the outer loop off, exactly as TEST 1:
+
+```bash
+# terminal C
+ros2 run robot_base balance_controller --ros-args \
+  --params-file src/robot_bringup/config/real.yaml -p a1:=0.0 -p a2:=0.0
+```
+
+Tilt the chassis by hand. This must behave **identically to TEST 1** — it is
+the same code path, and any difference is a bug introduced by the refactor.
+
+**Part 2 — reference shaping, with torque physically impossible.**
+
+```bash
+# terminal C — k3/k4/k_yaw ZERO: torque = 0 always, the wheels cannot move.
+# accel_limit and jerk_tau are slowed 15x ON PURPOSE: the log line is
+# throttled to 1 Hz, so at the real 0.3 m/s^2 the whole ramp is over inside
+# one log line and you would see nothing.
+ros2 run robot_base balance_controller --ros-args \
+  --params-file src/robot_bringup/config/real.yaml \
+  -p k3:=0.0 -p k4:=0.0 -p k_yaw:=0.0 \
+  -p accel_limit:=0.02 -p jerk_tau:=0.5
+```
+
+```bash
+# terminal E — step the command. Watch the "v <v_f>-><v_cmd>" field in C.
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist "{linear: {x: 0.15}}"
+# let it climb for ~10 s, then Ctrl-C THIS terminal only and watch it ramp back
+```
+
+```bash
+# terminal E — then the sub-threshold check. 0.03 is BELOW the old 0.05
+# driving threshold, i.e. the bottom third of the stick that used to be
+# silently discarded.
+ros2 topic pub -r 10 /cmd_vel geometry_msgs/Twist "{linear: {x: 0.03}}"
+```
+
+**Part 3 — anti-windup clamp, by hand.**
+
+Leave terminal C as it is from Part 2 (still zero torque, so the wheels turn
+freely in your hand). Watch the `err` field.
+
+```bash
+# nothing to run — spin BOTH wheels forward by hand, steadily, through more
+# than 0.5 m of travel (about 0.8 turns each). Keep going well past it.
+```
+
+### Expected
+
+| Action | Expected |
+|---|---|
+| Part 0, every `param get` | returns a value; none error |
+| Part 1, tilt nose-down | wheels spin FORWARD, harder with more tilt — same as TEST 1 |
+| Part 1, tilt nose-up | wheels spin BACKWARD |
+| Part 1, past ~40 deg | wheels STOP (`cutoff_pitch`) |
+| Part 2, command 0.15 | `v_cmd` climbs **smoothly from 0.00 toward 0.15** over ~8 s |
+| Part 2, first 1–2 log lines | climb starts **gently**, not at full slope — that is `jerk_tau` |
+| Part 2, `v_cmd` at rest | reaches 0.15 and stays; does not overshoot or hunt |
+| Part 2, wheels throughout | **do not move at all** — `k3 = k4 = 0` |
+| Part 2, Ctrl-C the publisher | `v_cmd` ramps back DOWN to 0.00; it does **not** jump |
+| Part 2, command 0.03 | `v_cmd` climbs to 0.03 and holds — the old code ignored this entirely |
+| Part 3, spin wheels forward | `err` grows, then **stops at +0.25** and stays no matter how far you spin |
+| Part 3, spin backward | `err` goes to **−0.25** and stops |
+
+### Failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| any `param get` errors "Parameter not set" | Pi running the OLD build — the whole point of Part 0 | `git pull && colcon build --packages-select robot_base`, re-source, restart C |
+| params return the OLD `a1 -0.09 / a2 -0.3` | pulled the code but not the yaml, or an override is set | check for stray `-p a1:=` on the command line |
+| `v_cmd` stays 0.00 forever | robot lying past `cutoff_pitch` on the stand — fallen branch resets it | sit it upright |
+| `v_cmd` stays 0.00, robot IS upright | mode never went teleop; disabled branch returns early | check terminal D is still publishing |
+| `v_cmd` jumps straight to 0.15 in one line | ramp not applied — check `accel_limit` came through at runtime | `ros2 param get` it |
+| `v_cmd` climbs but wheels also spin in Part 2 | `k3`/`k4` overrides did not take | they are CLI overrides; verify at runtime |
+| `err` keeps growing past 0.25 in Part 3 | anti-windup clamp not working — **do not go to the ground** | report it; this is the clamp that stops a runaway |
+| Part 1 differs from TEST 1 in any way | refactor changed the inner loop | stop; the inner loop was supposed to be untouched |
+
+### Why this works
+
+The rewrite replaced a two-branch law (drive vs station-keep) with one
+continuous law whose reference POSITION ramps at the reference SPEED. Nothing
+in that touches the inner loop, so Part 1 is a pure regression check: if
+`torque = k3*(pitch - pitch_target) + k4*pitch_rate` still responds to a hand
+tilt exactly as it did in TEST 1, the sign chain and the IMU path survived.
+
+Part 2 is the only way to see the new code honestly. On a stand `x` and `v` are
+meaningless — the wheels spin free, so anything driven by odometry is chasing
+a number that runs away. But `v_cmd` is derived **purely from `cmd_vel` and the
+clock**, not from odometry, so it is exactly as valid on a stand as on the
+ground. Zeroing `k3`/`k4` removes the only path from the controller to the
+motors, which makes this a software test that happens to be running on the
+robot. The 15x slowdown is not a different test — `accel_limit` and `jerk_tau`
+are linear time-scalings of the same ramp, so the SHAPE you are checking is
+unchanged; you are only making it slower than the 1 Hz log throttle.
+
+The gentle start is the whole point of `jerk_tau`. A bare rate limiter bounds
+acceleration, which makes acceleration a SQUARE WAVE — and since
+`accel_to_lean` feeds acceleration straight into the lean target, that square
+wave lands in torque and the jerk survives. Offline sim of this exact code
+measured peak torque slew at 0.663 Nm/tick with rate limiting alone and
+0.074 Nm/tick with both stages. What you are looking for in those first log
+lines is that the climb *eases in* rather than starting at full slope.
+
+Part 3 checks the one new failure mode that is genuinely dangerous. `x_home`
+integrates `v_cmd` without limit, so if the robot cannot keep up — blocked,
+held, torque-saturated — the reference runs away, and every centimetre of that
+is distance the robot will sprint to recover the moment it comes free. The
+clamp bounds it at `max_pos_error`. Spinning the wheels by hand is a direct
+simulation of exactly that: you are moving `x` while `v_cmd` is zero, which is
+the same divergence with the sign reversed.
+
+### Pass criteria
+
+- Every parameter in Part 0 returns a value, with `a1 = -0.07`, `a2 = -0.15`.
+- Part 1 is indistinguishable from TEST 1.
+- `v_cmd` reaches the commanded value **monotonically**, with a visibly gentle
+  start, and ramps back down on publisher loss rather than stepping.
+- A 0.03 m/s command produces a `v_cmd` of 0.03 — the discarded bottom third
+  of the stick is gone.
+- `err` saturates at **±0.25** and does not exceed it under sustained hand
+  spinning.
+
+### On pass
+
+Nothing to record — this test measures no new constants. Restore the real
+`accel_limit`/`jerk_tau` by restarting terminal C without the overrides, then
+re-run **TEST 3** on the ground: station keeping is what the retune changed
+most, and the sim predicts a large improvement (peak excursion 0.229 -> 0.132 m,
+settling 20+ s -> 4.1 s, 48 direction reversals -> 1). Then TEST 4, then TEST 5.
+
+If TEST 3 does NOT improve, the most likely explanation is that the standstill
+rocking really is stiction (backlog item 5) rather than the outer-loop ringing
+the sim attributes it to — that is a useful result, not a failure.
 
 ---
 

@@ -44,9 +44,11 @@ balance_controller:
     max_lean: 0.3
 
     # ── reference shaping (added 2026-08-01) ───────────────────────────────
-    # Ramp rate for v_cmd. Full stick (0.15 m/s) now takes 0.5 s to reach
-    # instead of arriving as a step. Raise once driving is boring.
-    accel_limit: 0.3          # m/s^2
+    # Ramp rate for v_cmd. RAISED 0.3 -> 0.45 on 2026-08-01 alongside the 50%
+    # teleop scale increase, so full-stick ramp time stays 0.225/0.45 = 0.5 s.
+    # Costs 0.45/9.81 = 0.046 rad (2.6 deg) of lean while accelerating, well
+    # inside max_lean 0.3.
+    accel_limit: 0.45         # m/s^2
 
     # Jerk limit. NOT optional: rate-limiting velocity alone turns acceleration
     # into a square wave, and accel_to_lean puts acceleration straight into

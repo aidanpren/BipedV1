@@ -3,18 +3,34 @@ teleop_twist_joy_node:
     axis_linear:
       x: 1
     # REDUCED for first hardware drive 2026-08-01. Were 2.0 / 3.0 / 4.0 —
-    # Gazebo values. Full stick at 2.0 m/s commands a lean of
+    # Gazebo values. Full stick at 2.0 m/s commanded a lean of
     # a2*(0 - 2.0) = 0.3 rad, which IS max_lean: an instant 17 deg lean
-    # demand on a robot that has balanced for one session. Raise these
-    # deliberately, one at a time, once driving is boring.
+    # demand on a robot that had balanced for one session.
+    #
+    # RAISED 50% on 2026-08-01 after TEST 3/4 passed on the unified law.
+    # The original reason for 0.15 was that a full-stick STEP went straight
+    # into a proportional term. balance_controller now rate- and jerk-limits
+    # the reference, so stick travel sets a target rather than a shock, and
+    # the driving-loop stability margin is set by a2 (bandwidth g*|a2|), not
+    # by top speed. Raising speed does not move the stability boundary.
+    #
+    # accel_limit was raised to match (0.3 -> 0.45 m/s^2 in real.yaml), so
+    # full-stick ramp time is unchanged at 0.225/0.45 = 0.5 s.
     scale_linear:
-      x: 0.15
+      x: 0.225
     scale_linear_turbo:
-      x: 0.3
+      x: 0.45
     axis_angular:
       yaw: 0
+    # YAW IS NOT RATE-LIMITED. balance_controller shapes linear.x only, so
+    # yaw_ref reaches the law as a step: t_yaw = k_yaw*(yaw_ref - w_z) =
+    # 4.0 * 0.75 = 3.0 Nm of DIFFERENTIAL torque, instantly, on a max_torque
+    # of 8.0. Yaw and balance share that budget (left = torque - t_yaw,
+    # right = torque + t_yaw, each clamped), so a hard yaw flick while the
+    # robot is also catching itself can saturate one wheel and clip the
+    # BALANCE torque. Watch for that before raising this further.
     scale_angular:
-      yaw: 0.5
+      yaw: 0.75
     enable_button: 7
     enable_turbo_button: 5
     # plain Twist end-to-end: the balance controller subscribes geometry_msgs/Twist
