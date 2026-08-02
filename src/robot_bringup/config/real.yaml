@@ -43,6 +43,23 @@ balance_controller:
     k_yaw: 4.0
     max_lean: 0.3
 
+    # ── yaw shaping (added 2026-08-02) ─────────────────────────────────────
+    # Closes the KNOWN GAP that stood since bring-up: linear.x got two stages
+    # of shaping and yaw got none, so a stick flick delivered
+    # k_yaw * scale_angular.yaw = 4.0 * 0.75 = 3.0 Nm of DIFFERENTIAL torque
+    # in a single tick, out of a max_torque of 8.0 that yaw SHARES with
+    # balancing.
+    #
+    # 2.0 rad/s^2 bounds the torque slew to k_yaw * 2.0 * dt = 0.08 Nm/tick at
+    # 100 Hz — the same slew the linear path achieves with both of its stages.
+    # Full-stick ramp: 0.75 / 2.0 = 0.375 s.
+    #
+    # TUNING: lower it if hard turns disturb the pitch loop; raise it if
+    # steering feels mushy. This is the knob to reach for BEFORE raising
+    # scale_angular.yaw, because it changes how abruptly the turn is
+    # requested, not how sharp the turn ultimately is.
+    yaw_accel_limit: 2.0      # rad/s^2
+
     # ── reference shaping (added 2026-08-01) ───────────────────────────────
     # Ramp rate for v_cmd. RAISED 0.3 -> 0.45 on 2026-08-01 alongside the 50%
     # teleop scale increase, so full-stick ramp time stays 0.225/0.45 = 0.5 s.
@@ -177,6 +194,44 @@ odrive_bridge:
     vel_limit: 20.0           # output rev/s
     publish_rate: 50.0        # Hz
     cmd_timeout: 0.5          # s; stale wheel torque -> COAST
+
+    # ── friction compensation (added 2026-08-02) ──────────────────────────
+    # For the symptom: balances in place but cannot hold still — leans, wheels
+    # don't respond, leans further, breaks free and over-corrects. Bounded
+    # hunting in a RANDOM direction that always recovers = symmetric stiction
+    # deadband. (A consistent direction would be BIAS instead: check
+    # pitch_trim and the IMU, not this.)
+    #
+    # BOTH DEFAULT 0.0 = OFF. Leave them off until measured. All four are read
+    # live, so tune with `ros2 param set /odrive_bridge <name> <value>` while
+    # the robot is balancing — no restart, no rebuild.
+    #
+    # USEFUL CALIBRATION, from Kt = 0.43 Nm/A x gear 8 = 3.44 Nm/A at the wheel
+    # and k3 = 20 Nm/rad:
+    #     0.35 Nm of breakaway  ~=  0.1 A of Iq  ~=  1 deg of pitch deadband
+    # So if the robot hunts over roughly +/-2 deg, expect breakaway near 0.7 Nm.
+    #
+    # HOW TO TUNE, in this order:
+    #  1. dither_torque FIRST — it is what fixes STANDSTILL. Raise from 0.0 in
+    #     0.05 Nm steps until the hunting stops. Expect to land somewhere near
+    #     breakaway. Too much = audible buzz and wasted heat, not instability.
+    #  2. friction_ff SECOND — it does nothing at standstill (friction opposes
+    #     MOTION, and there is none yet); it is what makes DRIVING smooth.
+    #     Set to ~70% of measured breakaway and do not exceed it. This term is
+    #     POSITIVE VELOCITY FEEDBACK: it pushes in the direction the wheel is
+    #     already going. Below true friction it cancels drag; ABOVE it, the
+    #     surplus accelerates the wheel and the balance loop has to fight its
+    #     own actuator. Symptom of overshoot is low-speed creep or surging
+    #     once rolling. Deliberately under-compensate.
+    #  3. friction_v_eps last, and only if low-speed driving feels notchy.
+    #
+    # SAFETY: exactly [0.0, 0.0] from balance_controller passes through
+    # uncompensated, so DISABLED stays truly silent no matter what these are
+    # set to. Do not remove that branch in odrive_bridge.
+    friction_ff: 0.0          # Nm at the wheel; Coulomb FF, for DRIVING
+    friction_v_eps: 0.2       # rad/s; taper width through zero
+    dither_torque: 0.0        # Nm at the wheel; for STANDSTILL
+    dither_hz: 25.0           # Hz; do NOT raise toward 50 -- see dither()
 
 leg_controller:
   ros__parameters:

@@ -22,13 +22,17 @@ teleop_twist_joy_node:
       x: 0.45
     axis_angular:
       yaw: 0
-    # YAW IS NOT RATE-LIMITED. balance_controller shapes linear.x only, so
-    # yaw_ref reaches the law as a step: t_yaw = k_yaw*(yaw_ref - w_z) =
-    # 4.0 * 0.75 = 3.0 Nm of DIFFERENTIAL torque, instantly, on a max_torque
-    # of 8.0. Yaw and balance share that budget (left = torque - t_yaw,
-    # right = torque + t_yaw, each clamped), so a hard yaw flick while the
-    # robot is also catching itself can saturate one wheel and clip the
-    # BALANCE torque. Watch for that before raising this further.
+    # YAW IS RATE-LIMITED as of 2026-08-02 (it was not, before). This value is
+    # the top turn rate; `yaw_accel_limit` in real.yaml governs how fast the
+    # robot is allowed to GET there, and that is the knob to touch first if
+    # turning upsets the pitch loop.
+    #
+    # The old hazard this replaced: yaw_ref reached the law as a step, so a
+    # flick put k_yaw*0.75 = 3.0 Nm of differential torque on the wheels in one
+    # tick. Yaw and balance still share the 8.0 Nm max_torque, but they no
+    # longer share it blindly — balance_controller now spends it in priority
+    # order (balance first, yaw gets the headroom) instead of clamping each
+    # wheel independently and letting a hard turn quietly eat balance torque.
     scale_angular:
       yaw: 0.75
     enable_button: 7

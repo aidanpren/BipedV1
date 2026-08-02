@@ -15,6 +15,7 @@ Test it with no hardware:
 """
 import math
 import threading
+import time
 
 import can
 import rclpy
@@ -26,6 +27,78 @@ from robot_base.odrive_can import (
 )
 
 TURNS_TO_RAD = 2 * math.pi
+
+
+# ── friction compensation (2026-08-02) ──────────────────────────────────────
+# Symptom that motivated it: the robot balances in place but cannot hold still.
+# It leans, the wheels do not respond, it leans further, the wheels break free
+# and over-correct. Bounded hunting, random direction, always recovers — the
+# signature of a symmetric stiction deadband, NOT a bias (a bias drifts the same
+# way every time).
+#
+# WHY THIS LIVES IN THE BRIDGE AND NOT IN balance_controller. This is actuator
+# LINEARISATION, not control: it makes the motor behave like the ideal torque
+# source the balance law already assumes it is. It also needs PER-WHEEL
+# velocity, and balance_controller only tracks the average of the two.
+#
+# Both effects default to 0.0 — installing this changes NOTHING until the
+# values are measured on the robot and set deliberately.
+
+def friction_feedforward(vel, tau_c, v_eps):
+    """Coulomb friction feedforward: push in the direction of travel.
+
+    Tapered through zero rather than a hard sign(v), because sign() chatters
+    at the zero crossing and the wheels sit at v=0 constantly on a balancing
+    robot.
+
+    IMPORTANT AND EASY TO MISREAD: this returns ~0 at v~0, so it does NOT fix
+    standstill hunting. Friction opposes MOTION; there is no motion to oppose
+    yet. This term is what makes DRIVING smooth. Dither is what deals with
+    standstill. They are not alternatives — they cover different regimes.
+    """
+    if tau_c <= 0.0 or v_eps <= 0.0:
+        return 0.0
+    return tau_c * max(-1.0, min(1.0, vel / v_eps))
+
+
+def dither(t, amp, hz):
+    """Square-wave dither used to linearise stiction at standstill.
+
+    Keeping the wheel micro-moving means there is no STATIC friction left to
+    break: the motor only ever fights the (lower, smoother) Coulomb friction.
+    Square rather than sine because time spent at full amplitude is what breaks
+    stiction, and a square spends all of it there.
+
+    A PHASE ACCUMULATOR, not `sin(2*pi*f*t) >= 0`. That difference is not
+    stylistic — the sine form is broken at exactly the frequencies we want.
+    Sampling it at 100 Hz with hz=50 evaluates sin(pi*i), which is 0 for every
+    integer i, so the sign falls out of floating-point rounding noise instead
+    of the waveform. Measured result: 16 high / 24 low and a -0.04 Nm MEAN,
+    i.e. a DC torque bias on the wheels — the exact failure mode we ruled out
+    as the cause of the hunting. The accumulator lands cleanly on both 25 Hz
+    (+ + - -) and 50 Hz (+ - + -).
+
+    Frequency must sit far above the balance loop (~1.6 rad/s ceiling) but with
+    enough samples per cycle to survive command-rate jitter. 100 Hz commands
+    make 50 Hz Nyquist-exact and therefore fragile: the BNO085 drops samples
+    over I2C, so the real rate is NOT a clean 100 Hz. 25 Hz gives four samples
+    per cycle and degrades gracefully. Driven off wall time, not a call
+    counter, so the FREQUENCY stays correct however the command rate jitters.
+    """
+    if amp <= 0.0 or hz <= 0.0:
+        return 0.0
+    return amp if (t * hz) % 1.0 < 0.5 else -amp
+
+
+# Dither is applied in ANTIPHASE: +1 on the left wheel, -1 on the right.
+#
+# This matters more than it looks. In phase, the two wheels shake the robot
+# fore-and-aft — injecting a disturbance straight into the pitch loop we are
+# trying to help. In antiphase the translational components cancel exactly and
+# what is left is a tiny yaw wiggle, and the balance loop is blind to yaw.
+# Each wheel still individually sees the full +/-amp alternation, so stiction
+# breaking is unaffected: friction is a per-wheel phenomenon.
+DITHER_PHASE = {'left': +1.0, 'right': -1.0}
 
 
 class ODriveBridge:
@@ -46,6 +119,14 @@ class ODriveBridge:
         self.node.declare_parameter('vel_limit', 20.0)       # output rev/s
         self.node.declare_parameter('publish_rate', 50.0)    # Hz
         self.node.declare_parameter('cmd_timeout', 0.5)      # s
+
+        # Friction compensation. BOTH DEFAULT OFF — see the module header.
+        # Read live every command so they can be tuned with `ros2 param set`
+        # while the robot is balancing, without a restart.
+        self.node.declare_parameter('friction_ff', 0.0)      # Nm at the WHEEL
+        self.node.declare_parameter('friction_v_eps', 0.2)   # rad/s taper width
+        self.node.declare_parameter('dither_torque', 0.0)    # Nm at the WHEEL
+        self.node.declare_parameter('dither_hz', 25.0)       # Hz — see dither()
 
         def p(name):
             return self.node.get_parameter(name).value
@@ -120,10 +201,60 @@ class ODriveBridge:
         if len(msg.data) < 2:
             return
         self.last_cmd_time = self.node.get_clock().now()
-        for name, torque in zip(('left', 'right'), msg.data[:2]):
+        left_cmd, right_cmd = float(msg.data[0]), float(msg.data[1])
+
+        # ── SAFETY CONTRACT: exactly [0.0, 0.0] means CUT TORQUE. ────────────
+        # It passes through uncompensated — no feedforward, no dither, nothing.
+        #
+        # This is load-bearing, not defensive coding. balance_controller keeps
+        # publishing at 100 Hz while DISABLED, and it publishes literal
+        # [0.0, 0.0] on all three of its cut paths (disabled mode, cutoff_pitch
+        # exceeded, and pre-settle). Without this branch, dither would energise
+        # the motors on a robot the operator had deliberately disabled — the
+        # exact thing CLAUDE.md forbids.
+        #
+        # Exact float equality is deliberate: those paths assign the literal
+        # 0.0, whereas the live law (torque -/+ t_yaw) landing on exactly 0.0
+        # on BOTH wheels in the same tick is not a thing that happens. If it
+        # ever did, the cost is one tick without dither.
+        if left_cmd == 0.0 and right_cmd == 0.0:
+            for c in self.clients.values():
+                c.set_torque(0.0)
+            return
+
+        def p(name):
+            return self.node.get_parameter(name).value
+
+        tau_c, v_eps = p('friction_ff'), p('friction_v_eps')
+        dither_amp, dither_hz = p('dither_torque'), p('dither_hz')
+
+        # Commands arrive at the ~100 Hz IMU rate, so anything approaching
+        # 50 Hz samples the square wave at its own transition and degenerates
+        # into a DC bias. Cheap to say out loud; expensive to diagnose on a
+        # robot that has started drifting for no visible reason.
+        if dither_amp > 0.0 and dither_hz > 30.0:
+            self.node.get_logger().warn(
+                f'dither_hz {dither_hz:.1f} is too close to half the ~100 Hz '
+                'command rate; the square wave degenerates into a DC torque '
+                'bias. Use 25 Hz or below.', throttle_duration_sec=10.0)
+
+        d = dither(time.monotonic(), dither_amp, dither_hz)
+
+        # Feedback is OUTPUT-shaft turns/s in the MOTOR's sign convention;
+        # invert brings it into the robot frame, which is the frame the
+        # commanded torque is already in. Compensate there, then apply invert
+        # ONCE at the end — the same convention joint_states is published in.
+        with self._lock:
+            vel = {n: self.fb[n][1] for n in self.clients}
+
+        for name, cmd in (('left', left_cmd), ('right', right_cmd)):
+            v_robot = self.invert[name] * vel[name] * TURNS_TO_RAD
+            torque = (cmd
+                      + friction_feedforward(v_robot, tau_c, v_eps)
+                      + DITHER_PHASE[name] * d)
             # ODriveClient.set_torque takes WHEEL Nm and divides by the gear
             # ratio internally — do NOT pre-divide here.
-            self.clients[name].set_torque(self.invert[name] * float(torque))
+            self.clients[name].set_torque(self.invert[name] * torque)
 
     # ── timer: poll feedback, publish joint_states ──────────────────────────
     def update(self):

@@ -46,6 +46,22 @@ class BalanceController:
         self.node.declare_parameter('accel_to_lean', 0.0)    # rad per m/s^2
         self.node.declare_parameter('max_pos_error', 0.25)   # m
 
+        # YAW SHAPING (2026-08-02). yaw_ref used to reach the law as a raw 20 Hz
+        # staircase while linear.x got two stages of shaping, so a stick flick
+        # put k_yaw*0.75 = 3.0 Nm of DIFFERENTIAL torque on the wheels in one
+        # tick, out of a max_torque of 8.0 shared with balancing.
+        #
+        # ONE stage here, not two. Stage 2 on the linear path exists because
+        # accel_to_lean feeds a_ref into pitch_target, so a square-wave a would
+        # become a square-wave lean target. Yaw has no such feedforward — t_yaw
+        # goes straight to differential torque — so bounding yaw ACCELERATION
+        # is enough, and a second lag would only add steering delay.
+        #
+        # 2.0 rad/s^2 puts the torque slew at k_yaw*2.0*dt = 0.08 Nm/tick at
+        # 100 Hz, which is the same slew the linear path achieves WITH both its
+        # stages (0.074 Nm/tick, measured offline). Full-stick ramp: 0.375 s.
+        self.node.declare_parameter('yaw_accel_limit', 2.0)  # rad/s^2
+
         # promoted from hardcoded constants 2026-08-01
         self.node.declare_parameter('v_filter_tau', 0.06)    # s
         self.node.declare_parameter('wheel_radius', 0.105)   # m
@@ -60,7 +76,8 @@ class BalanceController:
         self.v_ref = 0.0            # raw request from cmd_vel
         self.v_ramp = 0.0           # after the accel limit (stage 1)
         self.v_cmd = 0.0            # after the jerk limit (stage 2) — the law uses this
-        self.yaw_ref = 0.0
+        self.yaw_ref = 0.0          # raw request from cmd_vel
+        self.yaw_cmd = 0.0          # after the yaw accel limit — the law uses this
         self.last_cmd_time = self.node.get_clock().now()
         self.last_step = None       # measured dt for imu_callback
         self.last_js = None         # measured dt for joint_state_callback
@@ -100,6 +117,7 @@ class BalanceController:
             self.publisher.publish(Float64MultiArray(data=[0.0, 0.0]))
             self.x_home = self.x
             self.v_cmd = self.v_ramp = 0.0
+            self.yaw_cmd = 0.0
             self.upright_since = None
             return
 
@@ -121,6 +139,7 @@ class BalanceController:
         accel_limit = self.node.get_parameter('accel_limit').value
         jerk_tau = self.node.get_parameter('jerk_tau').value
         accel_to_lean = self.node.get_parameter('accel_to_lean').value
+        yaw_accel_limit = self.node.get_parameter('yaw_accel_limit').value
         max_pos_error = self.node.get_parameter('max_pos_error').value
         cutoff_pitch = self.node.get_parameter('cutoff_pitch').value
 
@@ -135,7 +154,7 @@ class BalanceController:
         # CLAUDE.md requires to own it.
         age = (now - self.last_cmd_time).nanoseconds * 1e-9
         v_target = self.v_ref if age < 0.5 else 0.0
-        yaw_ref = self.yaw_ref if age < 0.5 else 0.0
+        yaw_target = self.yaw_ref if age < 0.5 else 0.0
 
         # REFERENCE SHAPING, in two stages.
         #
@@ -157,10 +176,18 @@ class BalanceController:
         self.v_cmd += dv
         a_ref = dv / dt if dt > 0.0 else 0.0
 
+        # Same treatment for yaw, and note it ramps toward yaw_TARGET — so a
+        # stale cmd_vel decelerates the turn at yaw_accel_limit rather than
+        # stepping the differential torque to zero, exactly as the linear
+        # watchdog coasts v down instead of dropping it.
+        yaw_step = yaw_accel_limit * dt
+        self.yaw_cmd += max(-yaw_step, min(yaw_step, yaw_target - self.yaw_cmd))
+
         if abs(pitch) > cutoff_pitch:
             left = right = 0.0
             self.x_home = self.x    # home follows the robot while it's down
             self.v_cmd = self.v_ramp = 0.0
+            self.yaw_cmd = 0.0
             self.upright_since = None
         else:
             if self.upright_since is None:      # just recovered: re-anchor, start settle timer
@@ -223,6 +250,7 @@ class BalanceController:
                 pitch_target = 0.0
                 self.x_home = self.x
                 self.v_cmd = self.v_ramp = 0.0
+                self.yaw_cmd = 0.0
 
             # TRIM: the chassis angle at which the CoM sits over the contact
             # patch. It is NOT zero unless the robot is perfectly balanced fore
@@ -252,17 +280,34 @@ class BalanceController:
             # minus-law -(k3*(...)+k4*rate) slams the robot down in <1 s; this
             # plus-form balances and rejects 0.2 rad disturbances.
             torque = k3 * (pitch - pitch_target) + k4 * pitch_rate
-            t_yaw = k_yaw * (yaw_ref - msg.angular_velocity.z)
+            t_yaw = k_yaw * (self.yaw_cmd - msg.angular_velocity.z)
+
+            # BALANCE OUTRANKS STEERING when the budget runs out.
+            #
+            # Clamping left and right INDEPENDENTLY looks equivalent and is not.
+            # At torque 7.0 with t_yaw 3.0 you get left 4.0, right 10.0 -> 8.0,
+            # and the common mode that actually holds the robot up has silently
+            # become (8.0+4.0)/2 = 6.0. Asymmetric saturation steals 1 Nm from
+            # BALANCING to pay for a turn the driver asked for — the failure is
+            # invisible in the logs and shows up as the robot dropping a little
+            # every time you yaw hard while also catching yourself.
+            #
+            # So spend the budget in priority order: balance takes what it needs,
+            # yaw gets the headroom that is left. This also removes the need for
+            # a second clamp — |t_yaw| <= max_torque - |torque| guarantees both
+            # |left| and |right| <= max_torque by the triangle inequality.
+            torque = max(-max_torque, min(max_torque, torque))
+            headroom = max_torque - abs(torque)
+            t_yaw = max(-headroom, min(headroom, t_yaw))
             left = torque - t_yaw
             right = torque + t_yaw
-            left = max(-max_torque, min(max_torque, left))
-            right = max(-max_torque, min(max_torque, right))
 
         self.publisher.publish(Float64MultiArray(data=[left, right]))
 
         self.node.get_logger().info(
             f'pitch {pitch:+.3f}  x {self.x:+.2f}  err {self.x - self.x_home:+.2f}  '
-            f'v {self.v_f:+.2f}->{self.v_cmd:+.2f}  L {left:+.1f} R {right:+.1f}',
+            f'v {self.v_f:+.2f}->{self.v_cmd:+.2f}  w {self.yaw_cmd:+.2f}  '
+            f'L {left:+.1f} R {right:+.1f}',
             throttle_duration_sec=1.0)
 
         

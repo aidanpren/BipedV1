@@ -423,9 +423,17 @@ which is why this test was worthless before TEST 2A.
 **Yaw is genuinely unverified.** Gate 2 drove both wheels with `[0.5, 0.5]`,
 which only ever tested COMMON mode. `left = torque - t_yaw` /
 `right = torque + t_yaw` is DIFFERENTIAL and has never had current through it
-in that configuration. It is also a RATE loop, `k_yaw*(yaw_ref - ω_z)`, so a
+in that configuration. It is also a RATE loop, `k_yaw*(yaw_cmd - ω_z)`, so a
 flipped sign is positive feedback and spins up rather than merely turning the
 wrong way. Start at 0.3, not 0.5.
+
+**Changed 2026-08-02, and it changes what a bad sign looks like.** Yaw is now
+rate-limited (`yaw_accel_limit`, 2.0 rad/s²), so the command ramps over 0.375 s
+instead of stepping. A flipped sign therefore spins up over about a third of a
+second rather than instantly — more time to hit the cutoff, but do not read the
+slower onset as "the sign is fine". Also, balance now has first claim on the
+8.0 Nm: yaw only gets the headroom left over, so a turn that feels weak while
+the robot is working hard to stay up is expected behaviour, not a fault.
 
 ### Pass criteria
 

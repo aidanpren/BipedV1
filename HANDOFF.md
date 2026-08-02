@@ -94,17 +94,77 @@ requires to own it.
 
 ---
 
-## KNOWN GAP — yaw is not rate-limited
+## READY TO TUNE 2026-08-02 — friction compensation (stiction)
 
-`balance_controller` shapes `linear.x` only. `yaw_ref` reaches the law as a
-step: `k_yaw * 0.75 = 3.0 Nm` of differential torque, instantly, out of an
-8.0 Nm budget. Since `left = torque - t_yaw` and `right = torque + t_yaw` are
-each clamped, a hard yaw flick WHILE the robot is catching itself can saturate
-one wheel and clip the BALANCE torque.
+**Symptom it targets:** the robot balances in place but cannot hold still —
+leans, wheels do not respond, leans further, breaks free, over-corrects.
+Bounded hunting, RANDOM direction, always recovers. That is a symmetric
+stiction deadband. (Consistent direction would mean BIAS instead — check
+`pitch_trim` and the IMU, not this.)
 
-Fine at the old 0.5. At 0.75 it is untested. **Test it deliberately: spin hard
-while nudging it fore/aft.** If it loses authority mid-spin, that is this.
-Fix is to shape yaw the same way as linear — small change, same pattern.
+Two terms in `odrive_bridge`, both **defaulting to 0.0 = OFF**. Installing this
+changes nothing until tuned on the robot. All four params are read live, so
+tune with `ros2 param set /odrive_bridge <name> <value>` while it balances — no
+restart, no rebuild.
+
+- `dither_torque` — square-wave dither that keeps the wheel micro-moving so
+  there is no STATIC friction left to break. **This is the one that fixes
+  standstill.** Applied in ANTIPHASE (left +, right −) so the translational
+  components cancel exactly and only a tiny yaw wiggle remains, which the
+  balance loop is blind to. In phase it would shake the robot fore-and-aft,
+  straight into the pitch loop we are trying to help.
+- `friction_ff` — Coulomb feedforward on wheel velocity. **Does nothing at
+  standstill** (friction opposes MOTION and there is none yet); it is what
+  makes DRIVING smooth. It is positive velocity feedback, so deliberately
+  under-compensate — ~70% of measured breakaway.
+
+**Calibration:** Kt = 0.43 Nm/A × gear 8 = 3.44 Nm/A at the wheel, k3 = 20, so
+`0.35 Nm breakaway ≈ 0.1 A of Iq ≈ 1° of pitch deadband`. Hunting over ±2°
+implies breakaway near 0.7 Nm.
+
+**Order:** `dither_torque` first, in 0.05 Nm steps until hunting stops. Then
+`friction_ff`. Then `friction_v_eps` only if low-speed driving feels notchy.
+
+**Do not raise `dither_hz` toward 50.** At exactly half the ~100 Hz command
+rate every sample lands on the square wave's transition and the sign is decided
+by floating-point rounding — measured as a −0.04 Nm **DC torque bias**, the
+very failure mode this is meant to avoid. Default 25 Hz; the bridge warns above
+30 Hz.
+
+**Safety contract, do not remove:** exactly `[0.0, 0.0]` from
+`balance_controller` passes through uncompensated. `balance_controller` keeps
+publishing at 100 Hz while DISABLED, so without that branch dither would
+energise motors the operator deliberately shut off. Covered by
+`tools/test_friction_comp.py` (26 checks, no hardware).
+
+---
+
+## CLOSED 2026-08-02 — yaw rate limiting (was the KNOWN GAP)
+
+Two defects, both fixed in `balance_controller`, both covered by
+`tools/test_yaw_shaping.py` (11 checks, no hardware).
+
+**1. yaw arrived as a step.** `linear.x` got two stages of shaping and yaw got
+none, so a stick flick delivered `k_yaw * 0.75 = 3.0 Nm` of differential torque
+in one tick, out of an 8.0 Nm budget shared with balancing. Now ramped by a new
+`yaw_accel_limit` (2.0 rad/s², in real.yaml) — 0.08 Nm/tick, the same slew the
+linear path achieves with both of its stages. Full-stick ramp 0.375 s.
+
+Only ONE stage for yaw, deliberately: stage 2 on the linear path exists because
+`accel_to_lean` feeds acceleration into the lean target, and yaw has no such
+feedforward. A second lag would only add steering delay.
+
+**2. saturation quietly stole from balance.** `left` and `right` were clamped
+INDEPENDENTLY. At torque 7.0 with t_yaw 3.0 that gives left 4.0 / right 10.0 →
+8.0, so the common mode holding the robot up dropped from 7.0 to 6.0 — a 1.0 Nm
+loss, paid out of BALANCING, invisible in the logs. The budget is now spent in
+priority order: balance takes what it needs, yaw gets the headroom.
+
+**Still worth testing on hardware** — the sign convention is unchanged and has
+never had current through it (BALANCE_RUNBOOK TEST 4). What has changed is that
+a hard flick can no longer arrive as a step, so the spin-while-nudging test is
+now a tuning check rather than a hazard. Turn `yaw_accel_limit` DOWN if turning
+upsets the pitch loop; that is the knob to reach for before `scale_angular.yaw`.
 
 ---
 
