@@ -35,7 +35,10 @@ timeout 3 candump can0                             # expect heartbeats 001 021 0
 `pkill slcand` MUST come before `ip link delete`, or a carrier-less zombie
 squats the name and the next attempt fails with `SIOCSIFNAME: File exists`.
 
-`061` missing = left hip (node 3) still off the bus. Does not block balance.
+Expect all four: `001 021 041 061`. If `061` is missing the left hip is
+unplugged — **check the cable before concluding anything else.** That exact
+absence was once recorded as a hardware fault and carried through four
+documents for a week; it was a loose connector.
 
 ### Verify the two safety gates
 
@@ -501,9 +504,10 @@ do not let them blur together.
 
 ### On pass
 
-Balance bring-up is complete. Move to the backlog: left hip on CAN, IMU to
-UART, slcand under systemd, and friction feedforward for the standstill
-stiction hunting.
+Balance bring-up is complete. Move to the backlog: gate `leg_controller`'s
+`arm()` on mode, the DS4 mode-switch button, IMU to UART, slcand under systemd
+(written, see `deploy/`), and friction feedforward for the standstill stiction
+hunting.
 
 ---
 
@@ -541,7 +545,7 @@ sudo pkill -f slcand; sudo ip link delete can0 2>/dev/null; sleep 1
 sudo slcand -o -c -f -s6 /dev/ttyACM0 can0
 sudo ip link set up can0
 ip -br link show can0            # expect: can0  UP
-timeout 3 candump can0           # expect 001 021 041  (061 absent = left hip, fine)
+timeout 3 candump can0           # expect all four: 001 021 041 061
 ```
 
 **Part 1 — measure. Motors unpowered.**
@@ -873,8 +877,12 @@ the sim attributes it to — that is a useful result, not a failure.
 
 ## AFTER IT WORKS — the backlog
 
-1. **Left hip (node 3)** back on the CAN bus, then legs via `leg_controller`
-   (measure `zero_raw_*`, set `use_measured_zero` — see HARDWARE_BRINGUP.md).
+1. **Legs via `leg_controller`** (measure `zero_raw_*`, set
+   `use_measured_zero` — see HARDWARE_BRINGUP.md). All four motors including
+   the left hip are on the bus; the "node 3 is off the bus" entry that used to
+   be here was a loose cable during one test on 2026-07-29, not a fault.
+   **Before doing this, gate `arm()` on mode** — `leg_controller` currently
+   drives the legs to `home_position` at node startup regardless of mode.
 2. **IMU to UART.** I2C drops samples to clock stretching; that is not good
    enough to hold the robot up long-term. Wiring and strapping are in
    real.yaml's imu_node comment.

@@ -14,6 +14,8 @@ Two systemd units:
 |---|---|---|
 | `biped-can.service` | CANable → `slcand` → `can0`, up at 500 kbps | root |
 | `biped-stack.service` | `ros2 launch robot_bringup real.launch.py` | your user |
+| `biped-wifi.service` | at boot: join home WiFi, or become an access point | root |
+| `biped-wifi.timer` | optional: re-decide periodically if WiFi drops | root |
 
 ---
 
@@ -33,28 +35,29 @@ source rather than assumed:
    and a torque-mode axis at 0 Nm is limp — the wheels spin freely by hand.
    Energized, but not moving and not holding.
 
-2. **`leg_controller` DRIVES THE LEGS at startup.** It arms in **POSITION**
-   mode and ramps to `home_position`
-   ([leg_controller.py:140-145](../src/robot_base/robot_base/leg_controller.py#L140-L145)),
-   and it does not consult the mode either. `home_position` is `0.0` — the
-   retracted hard stop. So a boot with the legs extended is **powered motion at
-   power-on, with nobody's hand near the cutoff.**
+2. **`leg_controller` DRIVES THE LEGS at startup** — but **it is no longer
+   launched.** It arms in POSITION mode and ramps to `home_position`
+   ([leg_controller.py:140-145](../src/robot_base/robot_base/leg_controller.py#L140-L145))
+   without consulting the mode, so running it means powered leg motion at every
+   boot. Since 2026-08-02 `real.launch.py` declares `legs` with a default of
+   **false**, and the node is not started at all.
 
-   Today that cannot happen, because the left hip (node 3) is off the CAN bus,
-   so `establish_zero` times out and the node **refuses to arm**. That is safety
-   *by accident*. The moment backlog item 1 is fixed, enabling this unit at boot
-   becomes a leg that retracts as soon as the Pi finishes booting.
+   Not launching the node is a stronger guarantee than any check inside it:
+   there is no process on the bus to arm the hips. An earlier draft of this
+   file instead claimed the hazard was mitigated because the left hip was off
+   the CAN bus — that was wrong (the hip was never broken, just unplugged for
+   one test), and "a cable happens to be out" was never a safety mechanism.
 
-**Therefore:**
+**Therefore, as the stack ships today:**
 
-- Enabling `biped-can` at boot is safe now and stays safe. It creates a network
-  interface. Nothing moves.
-- Enabling `biped-stack` at boot is safe **only while the left hip is off the
-  bus**. Before you put node 3 back, `leg_controller` needs to gate `arm()` on
-  the mode the same way `balance_controller` gates torque — see backlog item 7
-  in `HANDOFF.md`.
-- Until then: enable `biped-can`, and *start `biped-stack` by hand* until you
-  have watched it come up a few times.
+- `biped-can` at boot: **safe.** It creates a network interface. Nothing moves.
+- `biped-stack` at boot: **safe to enable.** With `legs:=false` the only thing
+  that energizes is the two wheel axes at 0 Nm, which is limp — and
+  `mode_manager` boots into DISABLED. Nothing moves on power-on.
+- **`legs:=true` is the dangerous flag now**, and it carries the whole hazard.
+  Do not set it in the service, and do not use it for leg bring-up — bring the
+  legs up ALONE on a stand (HARDWARE_BRINGUP.md), and gate `arm()` on mode
+  (backlog 7) before the legs ever join the balance stack.
 
 The rest of the safety doctrine is unchanged and still applies:
 `mode_manager` boots into `DISABLED`, and **DISABLED with weight on the legs
@@ -70,12 +73,17 @@ deploy/
 ├── etc/default/biped           config template -> /etc/default/biped
 ├── systemd/
 │   ├── biped-can.service       -> /etc/systemd/system/
-│   └── biped-stack.service     -> /etc/systemd/system/  (templated)
+│   ├── biped-stack.service     -> /etc/systemd/system/  (templated)
+│   ├── biped-wifi.service      -> /etc/systemd/system/
+│   └── biped-wifi.timer        -> /etc/systemd/system/
 └── bin/                        -> /usr/local/lib/biped/
     ├── biped-can-cleanup.sh    zombie killer (ExecStartPre + ExecStopPost)
     ├── biped-can-start.sh      resolve device, exec slcand
     ├── biped-can-linkup.sh     wait for netdev, ip link set up
-    └── biped-stack.sh          source ROS, exec ros2 launch
+    ├── biped-stack.sh          source ROS, exec ros2 launch
+    ├── biped-wifi-setup.sh     ONE-TIME: create the AP profile (asks for a
+    │                           passphrase; never stored in this repo)
+    └── biped-wifi-mode.sh      status | auto | home | ap
 ```
 
 **All tuning lives in `/etc/default/biped`**, edited in place on the Pi. The
@@ -132,7 +140,7 @@ ip -brief link show can0            # expect: can0  UP
 ip -details link show can0          # expect: slcan, and NO <NOARP> without carrier
 
 # terminal B — the bus is real, not just the netdev
-candump can0                        # expect heartbeats 001 021 041 (061 absent)
+candump can0                        # expect all four: 001 021 041 061
 
 # terminal A — the zombie test. THIS is the part that has bitten before.
 sudo systemctl restart biped-can
@@ -161,7 +169,7 @@ candump can0
 | `systemctl start biped-can` | active (running) within ~2 s |
 | `journalctl … grep slcand` | one line naming a `/dev/serial/by-id/...` path, **not** `/dev/ttyACM0` |
 | `ip -brief link show can0` | `can0  UP` |
-| `candump can0` | heartbeat frames `001`, `021`, `041` — **`061` will be absent** (left hip is off the bus, backlog 1) |
+| `candump can0` | **all four** heartbeat frames: `001`, `021`, `041`, `061`. A missing `061` is a left-hip cable, not a fault — check the connector |
 | three `restart`s in a row | still exactly one `can*` interface, still UP |
 | `systemctl stop` | `can0` gone entirely — "Device does not exist" |
 | reboot | `can0` UP with no human intervention |
@@ -242,18 +250,20 @@ backlog item 3 in `HANDOFF.md`, and go to TEST 8.
 into `DISABLED`, with the dashboard reachable — replacing the six-terminal
 workflow.
 
-**Rig:** Robot **on a stand**, legs collapsed onto the retracted stop. Motors
-powered. Read the ⚠️ section at the top of this file first — this test arms the
-wheel axes at 0 Nm, and would drive the legs if the left hip were on the bus.
+**Rig:** Robot **on a stand**, wheels clear of everything, motors powered.
+Nothing should move during this test: `legs` defaults to false so
+`leg_controller` never starts, and the only thing that energizes is the two
+wheel axes at 0 Nm, which is limp. **If a leg moves, stop and find out why** —
+something is passing `legs:=true`.
 
 **Abort:** `sudo systemctl stop biped-stack`. `ros2 launch` gets SIGINT and
-shuts its nodes down in order; `odrive_bridge`'s own shutdown sets both wheels
-to 0 Nm and `IDLE`. If that is not fast enough, the physical power cut — know
-where it is before you start.
+shuts its nodes down in order; `odrive_bridge`'s shutdown sets both wheels to
+0 Nm and `IDLE`. Know where the physical power cut is anyway.
 
 **Prerequisites:** TEST 7 green. Workspace built **on the Pi** as your own user
 (`colcon build --symlink-install`, not under sudo, or root ends up owning
-`build/`). Left hip still off the CAN bus, or `leg_controller` gated on mode.
+`build/`). `BIPED_LAUNCH_ARGS` in `/etc/default/biped` must NOT contain
+`legs:=true` — check it.
 
 ### Commands
 
@@ -263,8 +273,8 @@ sudo systemctl start biped-stack
 journalctl -fu biped-stack
 
 # expect, in order: odrive_bridge "armed left/right in torque mode",
-# imu_node publishing, leg_controller REFUSING TO ARM (left hip absent),
-# mode_manager "mode -> disabled", rosbridge on 9090, http.server on 8000.
+# imu_node publishing, mode_manager "mode -> disabled", rosbridge on 9090,
+# http.server on 8000. NO leg_controller and NO leg_joy — legs defaults false.
 
 # terminal B — the stack is real, from a NORMAL shell (this is the check that
 # the systemd environment matches your interactive one)
@@ -305,7 +315,8 @@ sudo reboot
 | Action | Expected |
 |---|---|
 | `systemctl start biped-stack` | active (running); journal fills immediately (not after a delay — that would be `PYTHONUNBUFFERED` missing) |
-| journal | `armed left/right in torque mode`, `mode -> disabled`, and `leg_controller` refusing to arm |
+| journal | `armed left/right in torque mode`, `mode -> disabled`, and **no mention of `leg_controller` or `leg_joy`** |
+| the legs | **do not move at all.** Any leg motion means `legs:=true` leaked in from somewhere — stop and find it |
 | `ros2 topic echo /mode --once` | `data: 'disabled'` |
 | wheels by hand | spin freely — armed, but 0 Nm in torque mode is limp |
 | `ros2 param get …` | the values in `real.yaml`, proving the service loaded the same params your terminal runs did |
@@ -382,17 +393,270 @@ terminal" and "it fails in the service" are both true.
 ### On pass
 
 Tick backlog items A and B in `HANDOFF.md`. The six-terminal workflow is dead;
-the runbook's PRE-FLIGHT section can point here instead. Next: piece **D**, the
-Pi hotspot — and note it takes the radio, so the Pi cannot be on your home WiFi
-and be an access point on the same interface at the same time.
+the runbook's PRE-FLIGHT section can point here instead.
+
+Next is **not** the hotspot. It is backlog item 7 (gate `leg_controller`'s
+`arm()` on mode), which is what makes `systemctl enable biped-stack` safe, and
+then piece **E** — a DS4 button that switches to TELEOP. Together those are the
+whole remaining gap between here and *turn on the robot, turn on the pad, press
+a button, drive*.
+
+---
+
+## TEST 9 — the DS4 switches modes with no laptop
+
+**Proves:** a tap on the pad enters TELEOP and the L1+L2 combo returns to
+DISABLED, with nothing but the robot and the controller.
+
+**Rig:** Robot **on a stand**, wheels clear, motors powered, legs not involved
+(`legs:=false`). **Entering TELEOP starts the balance loop — torque comes on at
+that instant.** That is the point of the test, and it is why this is on a
+stand. Hand near the power cut for the first press.
+
+**Abort:** the combo you are testing (L1+L2) → DISABLED → torque cut. If the
+combo is the thing that is broken, use the physical power cut. Do not rely on
+`Ctrl-C` — you are testing whether the pad works, so assume it does not.
+
+**Prerequisites:** TEST 8 green. DS4 **paired to the Pi over Bluetooth and
+reconnecting on its own** — that is a separate piece of work and if it is not
+done, nothing below can pass. Button indices measured (step 0).
+
+### Commands
+
+```bash
+# ── step 0: MEASURE the button indices. Not a test, a measurement. ──────────
+# DS4 numbering differs between the SDL and joydev backends, and a wrong index
+# does not error — the button just never fires.
+ros2 run joy joy_node                    # terminal A
+python3 ~/BipedV1/tools/joy_probe.py     # terminal B, then press things
+
+# press Options, L1, L2. Write down the three numbers.
+# If L2 shows up ONLY as an axis, pick a different digital button for the
+# combo rather than adding a threshold.
+
+# put them in real.yaml under mode_manager:, then restart the stack.
+# NO colcon build — real.yaml is loaded from SOURCE via --params-file.
+sudo systemctl restart biped-stack
+
+# ── step 1: verify at RUNTIME, before trusting anything ─────────────────────
+ros2 param get /mode_manager teleop_button      # expect your measured number
+ros2 param get /mode_manager disable_buttons    # expect your measured pair
+
+# ── step 2: watch the mode while you press ──────────────────────────────────
+ros2 topic echo /mode                    # terminal C, leave it running
+
+# tap Options            -> 'teleop'   AND THE ROBOT STARTS BALANCING
+# hold Options           -> nothing more (edge, not level)
+# press L1 alone         -> nothing
+# press L2 alone         -> nothing
+# press L1+L2 together   -> 'disabled'
+# press L2 then L1       -> 'disabled'  (order must not matter)
+
+# ── step 3: the interlock ───────────────────────────────────────────────────
+# turn the PAD OFF, wait 2 s, then from a shell:
+ros2 service call /set_mode robot_interfaces/srv/SetMode "{mode: teleop}"
+# expect: success: false, message: 'no controller present'
+```
+
+### Expected
+
+| Action | Expected |
+|---|---|
+| tap teleop button | `/mode` → `teleop`, **wheels start actively balancing** |
+| keep holding it | nothing further — one transition per press, not 20/s |
+| release, tap again | fires again |
+| L1 alone / L2 alone | nothing |
+| L1+L2, either order | `/mode` → `disabled`, torque cut |
+| pad off, then `/set_mode teleop` | refused, `no controller present` |
+| pad off **while in TELEOP** | stays in TELEOP, **keeps balancing**, velocity zeroed in 0.5 s |
+
+### Failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| nothing happens on any press | wrong indices, or `/joy` not arriving at all | `ros2 topic hz /joy` first — no messages is a Bluetooth/`joy_node` problem, not a mode problem |
+| warn: "`/joy` has N buttons but indices need M" | pad reporting a different layout | re-measure with `joy_probe.py` |
+| mode flickers rapidly | edge detection defeated — should be impossible, tested in `tools/test_mode_buttons.py` | re-run that test; if it passes, suspect two `mode_manager` instances |
+| tap enters TELEOP but robot does not balance | not a mode problem — IMU or `odrive_bridge` | check `/imu` and `/joint_states` |
+| pad turns off and the robot DISABLES itself | **serious** — violates the CLAUDE.md invariant | signal loss must never auto-disable; check nothing added that path |
+
+### Why this works
+
+`mode_manager` already subscribed to `/joy` before this feature existed — it
+needed the arrival of a message as evidence a controller is alive, for the
+interlock that stops the dashboard arming a robot with no pad. This feature
+reads the *content* of a message it was already receiving.
+
+Both entry points, the buttons and the `SetMode` service, go through one
+`request_mode()`. That matters: the interlock used to live in the service
+callback, so a button handler calling `set_mode()` directly would have skipped
+it, and the robot would have had two different rule sets depending on who
+asked. One policy point means the pad and the dashboard are equally governed.
+
+Edge detection is not a nicety. `joy_node` autorepeats at 20 Hz, so a held
+button is a continuous stream of identical messages; acting on the level would
+fire the transition twenty times a second. The combo is edge-detected as a
+unit — it fires when *all* its buttons become held — which is why the order you
+press them in cannot matter.
+
+The asymmetry between the two gestures is deliberate. Entering TELEOP is one
+tap because it is the thing you do constantly. Leaving it cuts torque and drops
+the robot, so it takes two fingers: `DISABLED` is not a safe state, and the one
+thing CLAUDE.md is absolute about is that it must only ever arrive from an
+explicit command.
+
+### Pass criteria
+
+- Every row of the Expected table observed, including the two negative ones
+  (single combo button does nothing; held button does not re-fire).
+- The interlock refuses TELEOP with the pad off, and says why.
+- Pad switched off mid-TELEOP: robot **keeps balancing** and stays in TELEOP.
+- Ten consecutive tap/combo cycles with no missed or doubled transition.
+
+### On pass
+
+Write the measured indices into `real.yaml` **and** `sim.yaml`, and record them
+here. Piece E is done, and the goal — *turn on, pad on, press a button, drive* —
+is reachable end to end.
+
+**Measured button indices on this robot:** _(fill in)_ teleop `___`, disable `___`+`___`
+
+---
+
+## TEST 10 — the hotspot
+
+**Proves:** with no home WiFi in range the Pi brings up its own WPA2 access
+point at boot, and the dashboard is reachable from a phone with no other
+network involved.
+
+**Rig:** Robot powered, on a stand or on the bench. Nothing moves in this test.
+Motors may be off entirely — this is a networking test.
+
+**Abort:** nothing to abort; no motion. To recover a lost connection, use
+Ethernet or a console: `sudo /usr/local/lib/biped/biped-wifi-mode.sh home`.
+
+**Prerequisites:** `deploy/install.sh` has run. NetworkManager in use.
+`iw` installed (for the capability check). A phone or laptop to join with.
+
+### Commands
+
+```bash
+# ⚠️ RUN THIS OVER ETHERNET OR A CONSOLE, NOT OVER WIFI.
+# Activating the AP reconfigures the very interface an ssh-over-wifi session is
+# riding on. Same shape of mistake as pkill'ing your own shell.
+
+# ── one-time setup. Asks for a WPA2 passphrase; it is stored by
+#    NetworkManager (root-only, 0600) and never written into the repo.
+sudo /usr/local/lib/biped/biped-wifi-setup.sh
+
+# ── manual activation first, before anything is automatic
+sudo /usr/local/lib/biped/biped-wifi-mode.sh ap
+/usr/local/lib/biped/biped-wifi-mode.sh status   # expect role: ACCESS POINT
+
+# from a PHONE: join SSID 'BipedV1', then open
+#   http://10.42.0.1:8000/
+# the dashboard should connect and show the latched mode.
+
+# ── back to home WiFi, deliberately
+sudo /usr/local/lib/biped/biped-wifi-mode.sh home
+/usr/local/lib/biped/biped-wifi-mode.sh status   # expect role: client
+
+# ── now the automatic decision
+sudo systemctl enable --now biped-wifi.service
+journalctl -u biped-wifi -n 20 --no-pager        # expect "already on '<home>'"
+
+# ── the real test: boot with home WiFi UNREACHABLE.
+# Take the robot out of range, or power your home AP down, then reboot.
+sudo reboot
+# after it comes back, from a phone: join 'BipedV1', open the dashboard.
+```
+
+### Expected
+
+| Action | Expected |
+|---|---|
+| `biped-wifi-setup.sh` | reports AP-mode support and a set regulatory domain; creates `biped-ap` |
+| `... mode.sh ap` | `role: ACCESS POINT`, address `10.42.0.1` on wlan0 |
+| phone joins `BipedV1` | gets a `10.42.0.x` DHCP lease |
+| `http://10.42.0.1:8000/` | dashboard loads and shows the latched mode |
+| `... mode.sh home` | rejoins home WiFi; AP gone |
+| boot **in** home range | journal: "already on '<home>'" — AP never starts |
+| boot **out of** home range | journal: "no home WiFi — falling back"; AP up |
+
+### Failure modes
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| you lose your ssh session at `mode.sh ap` | you ran it over WiFi | expected; rejoin via the AP. Use Ethernet next time |
+| `nmcli con up` fails with a generic activation error | radio cannot do AP mode, or regulatory domain unset | `iw list` for AP support; `sudo iw reg set <CC>` |
+| AP appears but nobody can get an address | `ipv4.method` not `shared` | `nmcli con show biped-ap \| grep ipv4.method` |
+| AP up at boot even at home | scan ran before NM settled | `nm-online` in the unit covers this; raise its timeout |
+| interface flaps between AP and home | two deciders | the AP profile must be `autoconnect no` — verify it |
+| dashboard loads, mode never arrives | rosbridge, not WiFi | it binds `0.0.0.0`; check port 9090 is reachable from the phone |
+
+### Why this works
+
+The Pi 5 has one radio, and it cannot usefully be an access point and a
+home-WiFi client at once. So this is an either/or, and something has to choose.
+That something is `biped-wifi-mode.sh`, and it is the **only** chooser — the AP
+profile is created `autoconnect no` precisely so NetworkManager does not hold a
+competing opinion. Two deciders would produce a flapping interface with no
+single cause to point at.
+
+The policy is asymmetric on purpose. Falling *to* the AP is automatic, because
+that is the case where you have no other way to reach the robot. Returning to
+home WiFi is **not** automatic by default, for a reason that is more than
+caution: most drivers cannot scan while operating as an AP on the same radio,
+so noticing that home WiFi came back is not passive observation — it requires
+tearing the AP down to look. That outage would land exactly when you are in the
+field with a phone on the AP. Staying on the AP too long costs you a `git pull`
+you will notice; dropping it costs you telemetry while the robot is live.
+
+WPA2 is a safety control here, not hygiene. `rosbridge` binds `0.0.0.0:9090`
+and exposes `/set_mode`. On an open AP, anyone in range could put the robot
+into TELEOP and energize the motors. The passphrase is what stops a stranger
+arming your robot.
+
+Nothing in the ROS stack is ordered against this unit. Both `rosbridge` and the
+dashboard's `http.server` bind `0.0.0.0`, so they neither know nor care which
+interface appears when — which is what makes the hotspot independently
+testable, and keeps a WiFi scan out of the boot path for balancing.
+
+### Pass criteria
+
+- Booting **out of** home-WiFi range brings the AP up unattended, and a phone
+  can load the dashboard at `http://10.42.0.1:8000/` and see the live mode.
+- Booting **in** home-WiFi range joins home and never starts the AP.
+- `biped-wifi-mode.sh status` reports the truth in both cases.
+- The AP requires the passphrase (confirm a wrong one is rejected).
+
+### On pass
+
+Record the SSID here. Piece D is done. Note that while on the AP the Pi has no
+internet, so code reaches it by `scp`/`rsync` from a laptop joined to the AP
+rather than by `git pull`.
+
+**AP SSID on this robot:** _(fill in)_
 
 ---
 
 ## What this does NOT do
 
+- **Anything to do with the legs.** Deferred entirely (2026-08-02) —
+  `legs:=false`. Gating `arm()` on mode (backlog 7) is still required, but it
+  is now a prerequisite for turning the legs ON, not a blocker on shipping the
+  wheeled robot.
+- **Piece E, the DS4 mode-switch button** (backlog 9). `mode_manager` boots into
+  DISABLED and the only way out today is the `SetMode` service — a laptop or a
+  phone. Until a pad button can do it, the robot is not standalone however well
+  systemd works.
 - **Piece C, IMU I²C → UART.** Soldering iron. Still required before the first
   genuinely untethered drive.
-- **Piece D, the hotspot.** NetworkManager AP mode; not written yet.
-- **Piece E, web teleop.** The deadman-button control on the dashboard.
-- **Gate `leg_controller` on mode.** See the ⚠️ section — this is now on the
-  critical path *before* the left hip goes back on the bus.
+- **Piece D, the hotspot.** NetworkManager AP mode; not written yet, and no
+  longer on the critical path — the dashboard is optional and nothing about
+  driving needs the network.
+
+**Not planned, deliberately: web teleop.** The dashboard changes modes and shows
+readouts. Driving is the physical DS4 only. An earlier plan specified an
+on-screen deadman stick; that was an assumption, never a requirement, and it is
+withdrawn.

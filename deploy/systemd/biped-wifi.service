@@ -1,0 +1,27 @@
+[Unit]
+Description=BipedV1 WiFi role decision (home WiFi, or become the access point)
+Documentation=file:///etc/default/biped
+
+# NetworkManager must be up to be asked anything.
+Requires=NetworkManager.service
+After=NetworkManager.service
+
+# NOT ordered before biped-stack.service, deliberately. rosbridge and the
+# dashboard's http.server both bind 0.0.0.0, so they do not care which
+# interface appears when, or whether one appears at all. Making the ROS stack
+# wait on the network would add a boot dependency that buys nothing and could
+# delay balancing behind a WiFi scan.
+
+[Service]
+Type=oneshot
+RemainAfterExit=no
+EnvironmentFile=-/etc/default/biped
+
+# NetworkManager reports "started" before it has finished its first scan, so an
+# immediate decision would see no networks and fall straight to the AP. Wait
+# for it to settle; the timeout is a bound, not a sleep.
+ExecStartPre=/usr/bin/nm-online -s -q --timeout=30
+ExecStart=/usr/local/lib/biped/biped-wifi-mode.sh auto
+
+[Install]
+WantedBy=multi-user.target

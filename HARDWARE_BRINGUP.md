@@ -24,7 +24,7 @@ the **staged, on-a-stand bring-up of everything that moves under power.**
 | Direction (`invert_*`) verified open-loop | ✅ 2026-07-30 — both flipped |
 | IMU up (I2C) + `mount_rpy` solved + pitch sign verified | ✅ 2026-07-30 |
 | Wheels closed-loop + balance | ⬜ next |
-| Left hip (node 3) back on the CAN bus | ⬜ dropped off, not blocking balance |
+| All four motors on the CAN bus incl. left hip (node 3) | ✅ never actually broken — unplugged for one test 2026-07-29 |
 | IMU rewired I2C -> UART | ⬜ before untethered running |
 
 ---
@@ -147,6 +147,15 @@ ros2 topic echo /joint_states     # spin a wheel by hand -> values change
 ---
 
 ## WHAT'S NEXT — staged bring-up, ON A STAND, in this order
+
+> **LEG WORK IS DEFERRED (2026-08-02).** The wheeled robot is being finished
+> first, and `real.launch.py` now defaults `legs:=false` so `leg_controller`
+> does not run. Everything in this section is the procedure for when the legs
+> come back — it is not the current task.
+>
+> **Do not bring the legs up with `legs:=true` on the full stack.** That runs
+> them inside a live balance loop, changing two things at once. Legs alone, on
+> a stand, low current. See the "when the legs come back" section in HANDOFF.md.
 
 **Do NOT just launch the whole stack.** Each step is powered motion; verify one
 before the next. Robot on a stand, low currents, hand near the power cut.

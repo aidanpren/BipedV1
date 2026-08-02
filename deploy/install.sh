@@ -113,7 +113,8 @@ fi
 
 # --- helper scripts ---------------------------------------------------------
 install -d -m 0755 "${LIBDIR}"
-for f in biped-can-cleanup.sh biped-can-start.sh biped-can-linkup.sh biped-stack.sh; do
+for f in biped-can-cleanup.sh biped-can-start.sh biped-can-linkup.sh \
+         biped-stack.sh biped-wifi-setup.sh biped-wifi-mode.sh; do
     install -m 0755 "${HERE}/bin/${f}" "${LIBDIR}/${f}"
     echo "  installed ${LIBDIR}/${f}"
 done
@@ -136,8 +137,10 @@ else
 fi
 
 # --- units ------------------------------------------------------------------
-install -m 0644 "${HERE}/systemd/biped-can.service" "${UNITDIR}/biped-can.service"
-echo "  installed ${UNITDIR}/biped-can.service"
+for u in biped-can.service biped-wifi.service biped-wifi.timer; do
+    install -m 0644 "${HERE}/systemd/${u}" "${UNITDIR}/${u}"
+    echo "  installed ${UNITDIR}/${u}"
+done
 
 # biped-stack.service is a TEMPLATE: User=, Group=, WorkingDirectory= and
 # Environment=HOME= cannot come from EnvironmentFile= (systemd resolves them
@@ -159,13 +162,17 @@ echo "  systemctl daemon-reload"
 # --- enable (opt-in) --------------------------------------------------------
 echo
 if [ "${DO_ENABLE}" -eq 1 ]; then
+    # biped-wifi is NOT enabled here even with --enable. It needs its one-time
+    # setup (and a passphrase) first, and enabling it before that would boot
+    # into a WiFi decision with no AP profile to fall back to.
     systemctl enable biped-can.service biped-stack.service
-    echo "ENABLED. Both units will start at the next boot."
+    echo "ENABLED: biped-can, biped-stack. Both start at the next boot."
+    echo "WiFi is separate — run biped-wifi-setup.sh, then enable biped-wifi.service."
 else
     cat <<EOF
 Installed but NOT enabled — nothing about your next boot has changed yet.
 
-Test them by hand first (deploy/README.md, TEST 7):
+Test them by hand first (deploy/README.md, TESTs 7-10):
 
   sudo systemctl start biped-can
   systemctl status biped-can
@@ -176,8 +183,16 @@ Test them by hand first (deploy/README.md, TEST 7):
   journalctl -fu biped-stack
   ros2 topic list                   # from another shell, after sourcing ROS
 
+WiFi is a separate, ONE-TIME setup (it asks for a WPA2 passphrase, which is
+stored by NetworkManager and never written into this repo):
+
+  sudo ${LIBDIR}/biped-wifi-setup.sh
+  ${LIBDIR}/biped-wifi-mode.sh status
+
 Then, and only then:
 
   sudo systemctl enable biped-can biped-stack
+  sudo systemctl enable biped-wifi.service   # the boot-time WiFi decision
+  sudo systemctl enable biped-wifi.timer     # optional: recover if WiFi drops
 EOF
 fi

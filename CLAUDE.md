@@ -54,10 +54,13 @@ real risk. Fallback if it bites: port the by-then-proven loop to Pico firmware.
 2. **Optional driver station**: robot always publishes telemetry and accepts
    cmd_vel. When the laptop appears on the network, DDS discovery connects it
    automatically. When it's gone, the robot doesn't notice.
-3. **Control arbitration**: teleop or autonomous. Driver-station teleop is
-   PREFERRED but not mandatory — a controller plugged directly into the Pi is
-   a fallback. twist_mux handles this by priority + timeout.
+3. **Control arbitration**: teleop or autonomous. The PHYSICAL PS4 controller
+   is the ONLY thing that drives the robot. The intended sequence is: turn on
+   the robot, turn on the pad, press a button to switch to TELEOP, drive.
+   twist_mux arbitrates teleop vs autonomous by priority + timeout.
 4. **Dashboard**: see robot state, battery voltage, current draw; change modes.
+   OPTIONAL and read-mostly — a convenience for switching modes and watching
+   readouts. **It does not drive the robot.** No on-screen sticks.
 5. **Maintainable**: easy to add to, change, and navigate. Features are added
    by adding NODES, not editing a monolith. Every tunable is a YAML param,
    never hardcoded.

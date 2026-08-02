@@ -110,20 +110,71 @@ Fix is to shape yaw the same way as linear — small change, same pattern.
 
 ## NEXT MILESTONE: standalone operation
 
-Goal, in the dev's words: *turn on, get on the hotspot, go to the website,
-teleop, drive.* This is CLAUDE.md goals 1 and 4. Five pieces:
+Goal, in the dev's words (**CORRECTED 2026-08-02**): *turn on the robot, turn on
+the PS4 controller, press a button to switch to teleop mode, drive.* This is
+CLAUDE.md goals 1 and 3.
+
+**The earlier "get on the hotspot, go to the website, teleop, drive" framing was
+a misunderstanding and is withdrawn.** The dev never wanted to drive from a web
+page. The physical DS4 is the ONLY control device, and the dashboard is
+**optional** — it exists to change modes conveniently and to visualise
+readouts, which is exactly what CLAUDE.md goal 4 already said. No driving
+control belongs on it.
+
+Five pieces:
 
 | | piece | notes |
 |---|---|---|
 | **A** | `slcand` under systemd | **WRITTEN 2026-08-01, NOT YET RUN ON THE PI.** `deploy/biped-can.service`. Handles the zombie-interface trap (`pkill -x slcand` BEFORE `ip link delete`, on start AND on stop). Resolves the CANable through `/dev/serial/by-id/` rather than a bare `/dev/ttyACM0` — stable across re-enumeration and needs no custom udev rule of ours that could silently stop matching. Test: `deploy/README.md` TEST 7. |
 | **B** | ROS stack under systemd | **WRITTEN 2026-08-01, NOT YET RUN ON THE PI.** `deploy/biped-stack.service`. This is what kills the six-terminal workflow. Boots into DISABLED (mode_manager already does). Test: `deploy/README.md` TEST 8. **But read the leg-arming finding below before enabling it at boot.** |
-| **C** | IMU I2C -> UART | backlog 2. CLAUDE.md says before untethered running, and hotspot teleop IS untethered. Clock stretching drops samples. Wiring + PS1/PS0 strapping are in real.yaml's imu_node comment. |
-| **D** | Pi hotspot | NetworkManager AP mode. Independent of ROS, testable alone. Note it takes the radio — the Pi cannot be on your home WiFi and be an AP on the same interface. |
-| **E** | Web teleop | The dashboard, rosbridge, and phone access ALREADY WORK. This is adding a control to a working page, not building one. |
+| **C** | IMU I2C -> UART | backlog 2. CLAUDE.md says before untethered running, and driving off a stand IS untethered. Clock stretching drops samples. Wiring + PS1/PS0 strapping are in real.yaml's imu_node comment. |
+| **D** | Pi hotspot | **WRITTEN 2026-08-02, NOT YET RUN ON THE PI.** `biped-wifi.service` + `biped-wifi-mode.sh`. Home WiFi preferred, AP fallback, and the AP is *sticky* once up — see the design note below. Test: `deploy/README.md` TEST 10. |
+| **E** | **Mode switch from the DS4** | **WRITTEN 2026-08-02, LOGIC FULLY TESTED, indices unmeasured.** Replaces the withdrawn "web teleop". Tap → TELEOP, L1+L2 → DISABLED. `tools/test_mode_buttons.py` passes 21/21 with no hardware. Test: `deploy/README.md` TEST 9. |
 
-**Recommended order: A+B first.** Biggest quality-of-life win, needs no
-hardware, testable in one reboot, and it addresses the actual pain (six
-terminals). Then D, then E. C before the first genuinely untethered drive.
+**A, B, D and E are all written.** What is left is running them on the Pi:
+TESTs 7-10 in `deploy/README.md`, plus C (the IMU rewire) before the first
+genuinely untethered drive.
+
+### ⚠️ THE UNBUILT PREREQUISITE FOR E — Bluetooth pairing
+
+The button logic is done and tested. **But "turn on the PS4 controller" assumes
+the DS4 pairs to the PI, and it never has** — every joystick session so far ran
+through the laptop as driver station. So E's real remaining work is:
+
+1. **Pair + `trust` the DS4 to the Pi in `bluetoothctl`**, so the PS button
+   reconnects on its own after a power cycle. Untested, unknown effort.
+2. **`joy_node` must grab the right device.** The same class of trap as the
+   laptop, where `js0` turned out to be the accelerometer.
+3. Button logic — done.
+
+If 1 does not work, 2 and 3 are decoration. Do 1 first.
+
+### Piece E is much smaller than the old piece E was
+
+`mode_manager` **already subscribes to `/joy`** — but only to timestamp
+controller presence; the message content is explicitly discarded
+([mode_manager.py:50-53](src/robot_teleop/robot_teleop/mode_manager.py#L50-L53)).
+So the change is: read a button out of that same callback and call the
+already-factored-out `set_mode()`. No new node, no new topic, no new service
+round-trip — the subscription, the interlock and the setter all exist.
+
+Three things to settle before writing it:
+
+1. **Which button, and edge-vs-level.** It must be a deliberate press, so latch
+   on the rising edge — a level test would re-fire at 20 Hz.
+2. **Does the same button toggle back to DISABLED, or does a different one?**
+   Worth remembering that DISABLED is not "safe" here: with weight on the legs
+   it means COLLAPSE. Consider a separate, harder-to-hit button for it.
+3. **The interlock is already correct and should stay.** Entering a motion mode
+   requires a live controller
+   ([mode_manager.py:80](src/robot_teleop/robot_teleop/mode_manager.py#L80)) —
+   which a button press on that very controller trivially satisfies, so the
+   interlock costs nothing and still blocks the dashboard from arming a robot
+   with no pad connected.
+
+Note the deadman already exists and is unaffected: `teleop_twist_joy` has
+`enable_button: 7`, so even in TELEOP mode `cmd_vel` only flows while that
+button is held.
 
 ### A+B are written. What is left is running them on the Pi.
 
@@ -156,34 +207,86 @@ axis at 0 Nm is limp.
 `home_position` is `0.0` — the retracted stop. So **"power on" would mean "the
 legs drive themselves to retracted", with nobody's hand near the cutoff.**
 
-It cannot happen today only because the left hip (node 3) is off the CAN bus,
-so `establish_zero` times out and the node refuses to arm. That is safety by
-accident. **Backlog 1 (left hip) and enabling `biped-stack` at boot must not
-both be true until `leg_controller` gates `arm()` on mode** — new backlog
-item 7. Until then: enable `biped-can` at boot, start `biped-stack` by hand.
+An earlier draft claimed this was mitigated because the left hip was off the
+CAN bus. **That was wrong on both counts:** the hip was never broken — it was
+unplugged for a single test on 2026-07-29 and the absence got recorded as a
+fault — and "a cable happens to be out" is not a safety mechanism.
 
-E is the most fun and the lowest marginal value right now — the DS4 already
-works, and E is the only piece that cannot be fully judged until everything
-beneath it does.
+**RESOLVED 2026-08-02 by not launching the node.** `real.launch.py` now
+declares `legs`, default **false**, and `leg_controller` runs only with
+`legs:=true`. No process, nothing to arm. That is a stronger guarantee than a
+check inside the node, and it needed no change to `leg_controller` itself.
 
-### Design decision for E, settle before building
+Consequences:
+- **`systemctl enable biped-stack` is now safe.** On power-on the only thing
+  that energizes is the two wheel axes at 0 Nm (limp), with mode DISABLED.
+- **Backlog 7 is no longer a blocker on shipping the wheeled robot.** It is now
+  a prerequisite for turning the legs ON.
+- **`legs:=true` carries the whole hazard.** Do not put it in the service, and
+  do not use it for leg bring-up — see below.
 
-**A web page needs a deadman.** Reuse the invariant that already exists rather
-than inventing a new safety path: the page publishes only while a touch or
-pointer is held down, at a fixed rate. Release, close the tab, lock the phone,
-walk out of range — publishing stops, and `balance_controller`'s watchdog
-zeros velocity in 0.5 s and KEEPS BALANCING. Identical behaviour for every
-failure mode, and it is already tested (TEST 5).
+### Design decisions taken for E and D (2026-08-02)
 
-Wire it as a THIRD twist_mux input with its own timeout, at LOWER priority
-than the joystick, so plugging in the DS4 always overrides the browser.
+**E — one policy point, not two.** The interlock ("entering a motion mode needs
+a live controller") used to live in the `SetMode` service callback. A button
+handler calling `set_mode()` directly would have skipped it, giving the robot
+two rule sets depending on who asked. Both paths now go through
+`request_mode()`. The buttons live in `mode_manager` rather than a new node
+because `mode_manager` already had to subscribe to `/joy` for the presence
+watchdog — a separate node would mean two subscribers to one topic for two
+halves of one concern.
 
-**This reverses a decision from 2026-07-18** which deferred on-screen driving
-because "a laggy WiFi touch stick shouldn't keep it upright." That reasoning
-was correct when written and is now obsolete: the balance loop runs entirely
-on the Pi at 100 Hz, `cmd_vel` is only a velocity REFERENCE, and the watchdog
-degrades a dropout to "stops and stands there" rather than "falls." WiFi lag
-never touches the loop that keeps it upright.
+**E — the gestures are deliberately asymmetric.** Tap → TELEOP (one press, you
+do it constantly). L1+L2 together → DISABLED (two fingers, because it cuts
+torque and drops the robot). Edge-detected, not level: `joy_node` autorepeats
+at 20 Hz. Mode gestures are on the LEFT hand; `teleop_twist_joy`'s enable(R2)
+and turbo(R1) are on the right. Worth knowing: driving is the left *stick*, so
+the disable combo sits under the steering hand's index/middle finger — a
+two-button combo should still be safe, but that is where to look if it ever
+misfires.
+
+**E — indices are params in `real.yaml`, not constants.** Loaded from SOURCE,
+so finding the right number is edit-and-restart with no `colcon build` in the
+loop — which matters because it is a guess-and-check loop, and a rebuild in the
+middle of one is how you end up testing the old value.
+
+**D — exactly one thing decides which network is up.** The AP profile is
+created `autoconnect no` so NetworkManager does not hold a competing opinion;
+`biped-wifi-mode.sh` is the sole decider. Two deciders make a flapping
+interface with no single cause to point at.
+
+**D — the AP is STICKY once up, by default.** Falling *to* the AP is automatic
+(that is the case where you have no other way in). Returning to home WiFi is
+not, and the reason is technical before it is cautious: most drivers cannot
+scan while operating as an AP on the same radio, so noticing home WiFi returned
+requires tearing the AP down to look. That outage would land while you are in
+the field with a phone on it. Switch back deliberately:
+`biped-wifi-mode.sh home`.
+
+**D — WPA2 is a safety control, not hygiene.** `rosbridge` binds `0.0.0.0:9090`
+and exposes `/set_mode`; on an open AP anyone in range could put the robot in
+TELEOP and energize it. The passphrase lives in NetworkManager's root-only
+store and is never written into this repo.
+
+### WITHDRAWN 2026-08-02 — the web-teleop design
+
+This section used to specify a held-pointer deadman on the dashboard, wired as
+a third twist_mux input below the joystick, and argued at length that it
+reversed an earlier decision not to allow on-screen driving.
+
+**All of that is deleted. The dev never asked for web teleop** — it was an
+assumption, restated confidently enough across two documents and a memory file
+that it started to look like a requirement. The 2026-07-18 decision it claimed
+to reverse (*no on-screen driving*) was right, and stands.
+
+The dashboard changes modes and shows readouts. It does not drive the robot.
+`twist_mux` keeps its two inputs (`joy_vel`, `nav_vel`); no third input is
+needed.
+
+Kept because it is still true and still useful: `balance_controller`'s watchdog
+degrades ANY loss of `cmd_vel` to "zeros the velocity reference and keeps
+balancing" in 0.5 s, and that is already tested (TEST 5). It is what makes a
+dropped DS4 connection safe too.
 
 ---
 
@@ -200,11 +303,67 @@ speed change that "didn't take" is almost always this.
 
 ---
 
+---
+
+## SCOPE DECISION 2026-08-02 — legs are deferred
+
+**Finish the wheeled robot first; legs are a separate project afterwards.**
+`balance_controller` contains no leg references at all, so this costs the
+current goal nothing — the legs were only ever sharing the CAN bus and the
+launch file.
+
+Mechanism: `real.launch.py` declares `legs` (default **false**), which gates
+both `leg_controller` and `leg_joy`. Verified all three ways — default gives
+zero leg processes, `legs:=true` restores both, and `teleop.launch.py` on its
+own still defaults legs on so the sim path is unchanged. (`leg_joy` returning
+under `legs:=true` is the check that the argument really reached the include
+rather than silently defaulting.)
+
+`real.yaml`'s `leg_controller:` block is KEPT, not deleted — it holds the
+accumulated measurements and reasoning, and it is what the eventual leg test
+will load. It now carries a header saying editing it does nothing on a normal
+run, because "my tuning change didn't take" and "the node was never started"
+look identical from a terminal.
+
+### When the legs DO come back, the rig has to be built for it
+
+The dev's requirement, in his words: *easily and most importantly SAFELY test
+and tune the legs.* **`legs:=true` on the full stack is not that**, and must
+not be mistaken for it — it runs the legs inside a live balance loop on a robot
+that has never moved them, changing two things at once.
+
+What to build instead, when the time comes:
+
+- **A legs-alone launch.** `leg_controller` only — no balance, no wheels armed.
+  One variable under test.
+- **Deliberately low `current_limit`** (real.yaml ships 5.0). Under-current on a
+  leg means SAG, which is the safe direction to be wrong in; over-current
+  breaks printed linkage parts, which has already happened once on this robot.
+- **The power-cycle test FIRST** (HARDWARE_BRINGUP.md step 0). It decides
+  whether `pos_max` can be 0.10 or 0.19, and everything downstream assumes an
+  answer nobody has measured.
+- **The one-time zero measurement**, then `use_measured_zero: true`.
+- **Backlog 7 (gate `arm()` on mode) before the legs join the balance stack** —
+  not necessarily before the legs-alone bring-up, where you want the node to
+  arm on purpose.
+- **A TEST in TEST_FORMAT.md shape**, with the abort being the physical power
+  cut. A position-mode leg does not give up, and `Ctrl-C` is not fast enough.
+
+Remember DISABLED means the legs COLLAPSE (position mode) — so "just disable
+it" is not an abort once there is weight on them.
+
+---
+
 ## BACKLOG (unchanged except where noted)
 
-1. Left hip (node 3) off the CAN bus — no `061` heartbeat. Legs blocked.
-   **Now coupled to item 7 — do not fix this and enable `biped-stack` at boot
-   without also doing 7.**
+0. **LEGS ARE DEFERRED (2026-08-02).** Items 1 and 7 below are leg work and are
+   parked until the wheeled robot is finished. See the scope decision above.
+1. ~~Left hip (node 3) off the CAN bus~~ — **NOT A FAULT. CLOSED 2026-08-02.**
+   All four motors are on the bus and the left hip works. It was unplugged for
+   a single test on 2026-07-29; the missing `061` heartbeat was recorded as a
+   hardware fault and then carried forward through four documents as if it were
+   one. **Lesson: a one-off observation is not a diagnosis.** Legs are not
+   blocked — but see item 7, which this makes urgent rather than theoretical.
 2. IMU I2C -> UART. Now on the critical path for standalone (piece C).
 3. `slcand` under systemd. **WRITTEN** (`deploy/`), awaiting TEST 7 on the Pi.
 4. Friction feedforward for standstill stiction. **May have shrunk** — sim
@@ -215,11 +374,21 @@ speed change that "didn't take" is almost always this.
    ros_gz_bridge, ros_gz_sim). Deliberately not added — declaring them means
    rosdep pulls Gazebo onto the Pi.
 6. Yaw rate limiting (new, see KNOWN GAP above).
-7. **Gate `leg_controller`'s `arm()` on mode** (new, see the safety finding
-   above). Blocks "enable `biped-stack` at boot" from coexisting with item 1.
-   Same pattern `balance_controller` already uses for torque.
+7. **Gate `leg_controller`'s `arm()` on mode.** **DEFERRED with the legs** — no
+   longer blocks `systemctl enable biped-stack`, because the node is no longer
+   launched. Required before the legs join the balance stack. Same pattern
+   `balance_controller` already uses for torque.
 8. Run TEST 7 + TEST 8 on the Pi (`deploy/README.md`). A and B are written but
    entirely unverified on real hardware.
+9. ~~Piece E — DS4 button to enter TELEOP~~ **CODE DONE 2026-08-02**, 21/21 in
+   `tools/test_mode_buttons.py`. Two things remain, both on the Pi:
+   **(a) pair the DS4 to the Pi over Bluetooth** — never done, the real unknown;
+   **(b) measure the button indices** with `tools/joy_probe.py` and write them
+   into `real.yaml` + `sim.yaml`. Then TEST 9.
+10. **Piece D — hotspot. CODE DONE 2026-08-02**, unverified: this laptop has no
+    WiFi radio, so AP capability could not be checked here. Run
+    `biped-wifi-setup.sh` on the Pi (it checks `iw list` and the regulatory
+    domain for you), then TEST 10.
 
 ---
 

@@ -62,3 +62,37 @@ ROS_DOMAIN_ID=0
 # station) needs. LOCALHOST here would make the robot invisible to the laptop
 # and to a phone on the hotspot.
 ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
+
+# --- WiFi role (piece D) ----------------------------------------------------
+# The Pi 5 has ONE radio and cannot usefully be an access point and a home-WiFi
+# client at the same time. biped-wifi-mode.sh decides which, and is the ONLY
+# thing that decides — the AP profile is created with autoconnect=no so that
+# NetworkManager does not hold a competing opinion.
+WIFI_IFACE=wlan0
+
+# Name of the AP profile, and the SSID it broadcasts. Created once by
+# biped-wifi-setup.sh, which also takes the WPA2 passphrase — the passphrase
+# lives in NetworkManager's root-only connection store and NEVER in this repo.
+WIFI_AP_CON=biped-ap
+WIFI_AP_SSID=BipedV1
+
+# Which profile counts as "home". EMPTY = auto-detect: any saved wireless
+# profile that is not the AP. Leaving it empty means a network you join
+# normally, later, is picked up with no extra configuration step.
+WIFI_HOME_CON=
+
+# Whether to leave the AP automatically when home WiFi reappears.
+#
+# DEFAULT FALSE, and the reason is not conservatism. Most drivers CANNOT SCAN
+# while operating as an AP on the same radio, so "notice home WiFi is back" is
+# not passive observation — it requires tearing the AP down to look. That
+# outage would land while you are driving with a phone on the AP. Staying on
+# the AP too long costs you a `git pull` you will notice; dropping it costs you
+# telemetry while the robot is live.
+# Switch back deliberately instead:  biped-wifi-mode.sh home
+WIFI_RETURN_TO_HOME=false
+
+# If you do enable the above: how many consecutive checks must see home WiFi
+# before switching. Hysteresis, so one lucky scan at the edge of range does not
+# drop your dashboard.
+WIFI_HOME_CONFIRM_CHECKS=3

@@ -117,6 +117,39 @@ balance_controller:
     # to 41.3 but no reason to hand it over before the gains are trusted.
     max_torque: 8.0
 
+mode_manager:
+  ros__parameters:
+    # ── DS4 mode buttons (added 2026-08-02) ──────────────────────────────────
+    # THE ROBOT BOOTS INTO DISABLED. These buttons are how you leave it without
+    # a laptop, which is what makes the robot standalone at all.
+    #
+    # [MEASURE THESE] The indices below are the common joydev DS4 layout and
+    # are a STARTING GUESS. DS4 numbering differs between the SDL and joydev
+    # backends, and a wrong index does NOT error — the button just never fires,
+    # which looks exactly like a broken feature. Measure with:
+    #     python3 tools/joy_probe.py
+    # Reference guess:  4=L1  5=R1  6=L2  7=R2  9=Options
+    #
+    # This block is loaded from SOURCE (--params-file), so changing an index is
+    # edit + restart the node. NO colcon build. That is deliberate: finding the
+    # right number is a guess-and-check loop and a rebuild in the middle of it
+    # is how you end up testing the old value.
+
+    # Single tap -> TELEOP. The robot starts actively balancing at this moment,
+    # so it is the "explicit command" CLAUDE.md requires before torque.
+    # Keep it clear of teleop_twist_joy's enable_button(7)/enable_turbo(5).
+    teleop_button: 9            # Options
+
+    # ALL of these held at once -> DISABLED. A combo, not a single button,
+    # because DISABLED cuts torque and DROPS THE ROBOT — it must not be
+    # reachable by one fat finger while driving. L1+L2 puts the mode gestures
+    # on the left hand; enable/turbo are on the right.
+    #
+    # These are BUTTON indices. If your driver exposes L2 only as an analog
+    # AXIS (joy_probe will show you), pick a different digital button rather
+    # than adding a threshold — a threshold can drift, a button cannot.
+    disable_buttons: [4, 6]     # L1 + L2
+
 odrive_bridge:
   ros__parameters:
     can_interface: 'socketcan'
@@ -147,6 +180,23 @@ odrive_bridge:
 
 leg_controller:
   ros__parameters:
+    # ─────────────────────────────────────────────────────────────────────────
+    # NOT LAUNCHED BY DEFAULT since 2026-08-02. real.launch.py declares
+    # `legs` (default FALSE) and this node only runs with legs:=true.
+    #
+    # So: EDITING ANYTHING IN THIS BLOCK HAS NO EFFECT on a normal run. That is
+    # deliberate, and it is the failure mode to watch for here — a tuning
+    # change that "didn't take" because the node was never started, which looks
+    # exactly like a value that didn't load.
+    #
+    # These params are kept, not deleted: they are the accumulated measurements
+    # and reasoning for leg bring-up, and they are what the eventual leg test
+    # will load. Everything marked [SATURDAY] is still unmeasured.
+    #
+    # Do NOT bring the legs up by flipping legs:=true on the full stack. That
+    # runs them inside the balance loop on a robot that has never moved them.
+    # See HARDWARE_BRINGUP.md for the staged, legs-alone procedure.
+    # ─────────────────────────────────────────────────────────────────────────
     can_interface: 'socketcan'
     can_channel: 'can0'       # same bus as the wheels
     bitrate: 500000

@@ -38,11 +38,13 @@ def generate_launch_description():
         parameters=[params],
     )
 
-    # mode supervisor (latched /mode + SetMode service + controller interlock)
+    # mode supervisor (latched /mode + SetMode service + controller interlock
+    # + the DS4 mode buttons, whose indices come from sim.yaml)
     mode_manager = Node(
         package='robot_teleop',
         executable='mode_manager',
         output='screen',
+        parameters=[params],
     )
 
     # teleop input chain: joy -> teleop_twist_joy -> twist_mux -> /cmd_vel

@@ -14,6 +14,15 @@
 # ignored and the node quietly runs on its hardcoded defaults.
 # ---------------------------------------------------------------------------
 
+mode_manager:
+  ros__parameters:
+    # DS4 mode buttons. Kept structurally identical to real.yaml so the
+    # `diff sim.yaml real.yaml` habit keeps working — and so a button index
+    # learned in sim is the same one the robot uses.
+    # See real.yaml for the full reasoning and the MEASURE-THESE warning.
+    teleop_button: 9            # Options
+    disable_buttons: [4, 6]     # L1 + L2 held together -> DISABLED
+
 balance_controller:
   ros__parameters:
     # Inner loop: pitch -> wheel torque. Tuned in Gazebo 2026-07-13.

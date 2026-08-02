@@ -1,0 +1,29 @@
+[Unit]
+Description=Re-check the BipedV1 WiFi role periodically
+Documentation=file:///etc/default/biped
+
+# ---------------------------------------------------------------------------
+# This timer only DOES anything in two cases:
+#   * the interface is disconnected (home WiFi dropped) -> fall back to the AP
+#   * WIFI_RETURN_TO_HOME=true and we are on the AP     -> check for home
+# With the default sticky-AP policy the periodic run is a cheap no-op that logs
+# one line, which is exactly what you want from a recovery timer: it exists for
+# the case where home WiFi disappears mid-session and you would otherwise be
+# left with no dashboard and no way to ask for one.
+#
+# Enabling this is OPTIONAL. biped-wifi.service alone gives you the boot-time
+# decision, which is the whole policy for most sessions.
+# ---------------------------------------------------------------------------
+
+[Timer]
+# First check shortly after boot — biped-wifi.service already made the initial
+# decision, so this is the "did it stick?" pass.
+OnBootSec=2min
+OnUnitInactiveSec=2min
+
+# Spread the wakeups a little; nothing here is time-critical and a fixed period
+# means every scan lands on the same second forever.
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

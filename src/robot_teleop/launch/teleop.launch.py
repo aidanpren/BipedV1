@@ -2,10 +2,22 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
+from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
 def generate_launch_description():
+    # Whether the leg-height stick is live. Defaults TRUE because sim legs work
+    # and are harmless; real.launch.py passes 'false' explicitly.
+    # See the note on leg_joy at the bottom of this file.
+    legs = DeclareLaunchArgument(
+        'legs', default_value='true',
+        description='Publish /leg_position_cmd from the right stick. '
+                    'false on the real robot until leg bring-up is done.')
+
     return LaunchDescription([
+        legs,
         Node(
             package='joy',
             executable='joy_node',
@@ -51,9 +63,17 @@ def generate_launch_description():
         ),
         # right-stick -> leg height. Publishes /leg_position_cmd (turns), the
         # same topic the dashboard slider and the real leg_controller use.
+        #
+        # CONDITIONAL since 2026-08-02. With legs:=false this node is not
+        # launched at all, so the stick cannot produce a leg command even by
+        # accident. That is a stronger guarantee than "leg_controller is not
+        # running so nothing is listening": it stays true the moment
+        # leg_controller DOES come back, which is exactly when a stray
+        # setpoint would matter most.
         Node(
             package='robot_teleop',
             executable='leg_joy',
             output='screen',
+            condition=IfCondition(LaunchConfiguration('legs')),
         )
     ])
