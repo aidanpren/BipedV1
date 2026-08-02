@@ -23,10 +23,24 @@ balance_controller:
     # Outer loop: position/velocity -> desired lean.
     # Sign verified 2026-07-13: POSITIVE a1/a2 = saturated-lean runaway,
     # NEGATIVE = station hold (given the plus-form control law in the node).
-    a1: -0.05           # position -> lean
+    # a1 and a2 are coupled, not independent:
+    #   omega_n = sqrt(g*|a1|)      zeta = (|a2|/2) * sqrt(g/|a1|)
+    # Retune them as a pair. See real.yaml for the derivation and for why
+    # a2 also has a hard ceiling of its own (non-minimum-phase plant).
+    a1: -0.07           # position -> lean
     a2: -0.15           # velocity -> lean
 
     k_yaw: 4.0          # yaw-rate gain (differential wheel torque)
+
+    # Reference shaping (2026-08-01) — see real.yaml for the full rationale.
+    accel_limit: 0.3      # m/s^2, ramp rate on v_cmd
+    jerk_tau: 0.15        # s, smooths a_ref so the feedforward is not an edge
+    accel_to_lean: 0.102  # rad per m/s^2 = 1/g, acceleration feedforward
+    max_pos_error: 0.25   # m, anti-windup clamp on the reference position
+    v_filter_tau: 0.06    # s, wheel-velocity low-pass time constant
+
+    wheel_radius: 0.105 # m
+    cutoff_pitch: 0.7   # rad
 
     # Safety saturations.
     max_lean: 0.3       # rad, cap on the outer loop's lean request

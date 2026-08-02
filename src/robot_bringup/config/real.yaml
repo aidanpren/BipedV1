@@ -18,10 +18,67 @@ balance_controller:
     # robot has different mass distribution, real friction, and IMU noise.
     k3: 20.0
     k4: 2.0
-    a1: -0.09
-    a2: -0.3
+
+    # RETUNED 2026-08-01 as a PAIR. The outer loop is second order:
+    #     omega_n = sqrt(g*|a1|)        zeta = (|a2|/2) * sqrt(g/|a1|)
+    # so a1 and a2 are not independent knobs and tuning one alone always
+    # disappoints.
+    #
+    # The driving loop is v_dot = g*|a2|*(v_ref - v), i.e. a bandwidth of
+    # g*|a2| rad/s. A balancer is non-minimum-phase (it drives its wheels
+    # backward to lean forward), which caps usable bandwidth at roughly
+    # sqrt(g/l_com)/4 ~ 1.6 rad/s for this robot. a2 = -0.3 demands 2.9 rad/s
+    # -- about twice the physical ceiling. That, not a bad gain elsewhere,
+    # is what made acceleration surge.
+    #
+    #   old  -0.09/-0.3   omega_n 0.94  zeta 1.57  slow pole tau 3.0 s
+    #   new  -0.07/-0.15  omega_n 0.83  zeta 0.89  poles    tau 1.4 s
+    #
+    # Halving a2 halves the driving bandwidth to 1.5 rad/s (inside the
+    # ceiling) and dropping a1 with it leaves station keeping better damped
+    # AND twice as quick to return. There was never a trade-off here.
+    a1: -0.07
+    a2: -0.15
+
     k_yaw: 4.0
     max_lean: 0.3
+
+    # ── reference shaping (added 2026-08-01) ───────────────────────────────
+    # Ramp rate for v_cmd. Full stick (0.15 m/s) now takes 0.5 s to reach
+    # instead of arriving as a step. Raise once driving is boring.
+    accel_limit: 0.3          # m/s^2
+
+    # Jerk limit. NOT optional: rate-limiting velocity alone turns acceleration
+    # into a square wave, and accel_to_lean puts acceleration straight into
+    # torque, so without this the step just moves from v to a. Offline sim:
+    # peak torque slew 0.663 Nm/tick without, 0.074 Nm/tick with.
+    # RAISE for a softer, lazier throttle; lower for a crisper one.
+    jerk_tau: 0.15            # s
+
+    # 1/g. Holding a lean theta accelerates the robot at a = g*tan(theta) ~
+    # g*theta, so the lean needed for a commanded acceleration is a/9.81.
+    # This is FEEDFORWARD of a quantity we already know, exactly like
+    # pitch_trim -- not a tuned gain. It is what lets a2 stay small: without
+    # it the cruise lean has to come from a banked position error of
+    # a_ref/(g*|a1|) = 0.44 m, which is repaid as a lurch when you centre the
+    # stick.
+    # SET TO 0.0 to disable the feedforward and leave everything else intact.
+    # It is live-tunable, so that is a safe first experiment.
+    accel_to_lean: 0.102      # rad per m/s^2
+
+    # Anti-windup: how far the reference position may lead the robot. Every
+    # centimetre past this is distance the robot would sprint to recover after
+    # being blocked or held.
+    max_pos_error: 0.25       # m
+
+    # Wheel-velocity low-pass, as a TIME CONSTANT (see balance_controller).
+    # The old hardcoded 0.85/0.15 was 123 ms at the 50 Hz odrive_bridge
+    # actually publishes. RAISE THIS if the standstill stiction rocking gets
+    # worse; lower it if driving still feels laggy.
+    v_filter_tau: 0.06        # s
+
+    wheel_radius: 0.105       # m
+    cutoff_pitch: 0.7         # rad; beyond this the robot is down, cut torque
 
     # [SATURDAY] Chassis pitch where the CoM sits over the contact patch, rad.
     # POSITIVE = nose-down. A back-heavy robot needs a positive trim; leave it
