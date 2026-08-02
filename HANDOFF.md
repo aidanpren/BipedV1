@@ -115,8 +115,8 @@ teleop, drive.* This is CLAUDE.md goals 1 and 4. Five pieces:
 
 | | piece | notes |
 |---|---|---|
-| **A** | `slcand` under systemd | backlog 3. Without it CAN does not exist after boot — hard blocker for "just turn on". Must handle the zombie-interface trap (`pkill slcand` BEFORE `ip link delete`). Prefer a udev rule keyed on the CANable's USB serial over a bare `/dev/ttyACM0`, which can re-enumerate. |
-| **B** | ROS stack under systemd | `real.launch.py` on boot. This is what kills the six-terminal workflow. Boots into DISABLED (mode_manager already does) so power-on does NOT mean torque-on. |
+| **A** | `slcand` under systemd | **WRITTEN 2026-08-01, NOT YET RUN ON THE PI.** `deploy/biped-can.service`. Handles the zombie-interface trap (`pkill -x slcand` BEFORE `ip link delete`, on start AND on stop). Resolves the CANable through `/dev/serial/by-id/` rather than a bare `/dev/ttyACM0` — stable across re-enumeration and needs no custom udev rule of ours that could silently stop matching. Test: `deploy/README.md` TEST 7. |
+| **B** | ROS stack under systemd | **WRITTEN 2026-08-01, NOT YET RUN ON THE PI.** `deploy/biped-stack.service`. This is what kills the six-terminal workflow. Boots into DISABLED (mode_manager already does). Test: `deploy/README.md` TEST 8. **But read the leg-arming finding below before enabling it at boot.** |
 | **C** | IMU I2C -> UART | backlog 2. CLAUDE.md says before untethered running, and hotspot teleop IS untethered. Clock stretching drops samples. Wiring + PS1/PS0 strapping are in real.yaml's imu_node comment. |
 | **D** | Pi hotspot | NetworkManager AP mode. Independent of ROS, testable alone. Note it takes the radio — the Pi cannot be on your home WiFi and be an AP on the same interface. |
 | **E** | Web teleop | The dashboard, rosbridge, and phone access ALREADY WORK. This is adding a control to a working page, not building one. |
@@ -124,6 +124,43 @@ teleop, drive.* This is CLAUDE.md goals 1 and 4. Five pieces:
 **Recommended order: A+B first.** Biggest quality-of-life win, needs no
 hardware, testable in one reboot, and it addresses the actual pain (six
 terminals). Then D, then E. C before the first genuinely untethered drive.
+
+### A+B are written. What is left is running them on the Pi.
+
+Everything is in `deploy/` — two units, four helper scripts, an idempotent
+`install.sh`, and TEST 7 / TEST 8 in the standard format. Validated as far as a
+laptop allows: `systemd-analyze verify` clean on both units, `bash -n` clean on
+all five scripts, `slcand -F` confirmed present, the device-resolution failure
+path exercised (fails loudly with an actionable message, exit 1), and
+`biped-stack.sh` run end-to-end against this workspace — it sourced Jazzy plus
+the overlay, exec'd `ros2 launch`, brought up 12 processes including rosbridge
+on 9090 and the dashboard on 8000, and passed `can_channel:=vcan0
+imu_driver:=fake` through to the nodes. **None of that proves anything about
+the Pi**: no CANable, no reboot, no `systemctl`. TEST 7 and TEST 8 are the real
+verification.
+
+`install.sh` is deliberately **install-only**. Running it changes nothing about
+the next boot; `systemctl enable` is a separate, explicit act.
+
+### ⚠️ NEW SAFETY FINDING — `leg_controller` arms and MOVES at startup
+
+Found while writing piece B, verified in source, not previously written down.
+
+`odrive_bridge` arms both wheels unconditionally in `__init__`
+(`arm()` at odrive_bridge.py:77) with no reference to the mode. That is fine:
+`balance_controller` publishes `[0.0, 0.0]` while DISABLED, and a torque-mode
+axis at 0 Nm is limp.
+
+`leg_controller` is different. It arms in **POSITION** mode and ramps to
+`home_position` (leg_controller.py:140-145), also without consulting the mode.
+`home_position` is `0.0` — the retracted stop. So **"power on" would mean "the
+legs drive themselves to retracted", with nobody's hand near the cutoff.**
+
+It cannot happen today only because the left hip (node 3) is off the CAN bus,
+so `establish_zero` times out and the node refuses to arm. That is safety by
+accident. **Backlog 1 (left hip) and enabling `biped-stack` at boot must not
+both be true until `leg_controller` gates `arm()` on mode** — new backlog
+item 7. Until then: enable `biped-can` at boot, start `biped-stack` by hand.
 
 E is the most fun and the lowest marginal value right now — the DS4 already
 works, and E is the only piece that cannot be fully judged until everything
@@ -166,8 +203,10 @@ speed change that "didn't take" is almost always this.
 ## BACKLOG (unchanged except where noted)
 
 1. Left hip (node 3) off the CAN bus — no `061` heartbeat. Legs blocked.
+   **Now coupled to item 7 — do not fix this and enable `biped-stack` at boot
+   without also doing 7.**
 2. IMU I2C -> UART. Now on the critical path for standalone (piece C).
-3. `slcand` under systemd. Now on the critical path (piece A).
+3. `slcand` under systemd. **WRITTEN** (`deploy/`), awaiting TEST 7 on the Pi.
 4. Friction feedforward for standstill stiction. **May have shrunk** — sim
    attributed much of the standstill rocking to outer-loop ringing from
    `a2 = -0.3` rather than stiction. Check what TEST 3 actually showed before
@@ -176,6 +215,11 @@ speed change that "didn't take" is almost always this.
    ros_gz_bridge, ros_gz_sim). Deliberately not added — declaring them means
    rosdep pulls Gazebo onto the Pi.
 6. Yaw rate limiting (new, see KNOWN GAP above).
+7. **Gate `leg_controller`'s `arm()` on mode** (new, see the safety finding
+   above). Blocks "enable `biped-stack` at boot" from coexisting with item 1.
+   Same pattern `balance_controller` already uses for torque.
+8. Run TEST 7 + TEST 8 on the Pi (`deploy/README.md`). A and B are written but
+   entirely unverified on real hardware.
 
 ---
 

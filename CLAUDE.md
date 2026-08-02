@@ -87,6 +87,9 @@ src/. Build from the root with colcon; never commit build/, install/, or log/.
 - robot_dashboard   — rosbridge + web dashboard (browser/phone)
 - robot_navigation  — Nav2/SLAM (later)
 - tools/            — non-ROS dev tools: fake_odrive + no-hardware tests
+- deploy/           — non-ROS production deployment: the systemd units that
+                      make the robot start itself (CAN + the ROS stack),
+                      their config, and TEST 7/8. See deploy/README.md.
 
 ## Environment
 ROS 2 Jazzy on Ubuntu 24.04 (WSL2 on the dev laptop). Staying on Jazzy —

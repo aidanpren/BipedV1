@@ -14,6 +14,13 @@ DISABLED mode — it is not wired to a button yet.
 
 ## PRE-FLIGHT (every session — the Pi loses CAN on reboot)
 
+> **Superseded once TEST 7 passes.** `deploy/biped-can.service` does all of
+> this at boot, including the zombie cleanup, and resolves the CANable through
+> `/dev/serial/by-id/` instead of assuming `/dev/ttyACM0`. After that the
+> pre-flight is just `systemctl status biped-can`. Keep the manual sequence
+> below — it is still how you bring CAN up on the bench, and how you check
+> whether a systemd failure is systemd's fault or the bus's.
+
 ```bash
 cd ~/BipedV1
 source install/setup.bash
@@ -872,7 +879,10 @@ the sim attributes it to — that is a useful result, not a failure.
    enough to hold the robot up long-term. Wiring and strapping are in
    real.yaml's imu_node comment.
 3. **`slcand` in systemd** so CAN survives a reboot — required for the
-   "powers on and balances" goal.
+   "powers on and balances" goal. **WRITTEN**: `deploy/`, with TEST 7 (CAN
+   under systemd) and TEST 8 (the ROS stack under systemd) in
+   `deploy/README.md`. Not yet run on the Pi. Read the leg-arming safety
+   finding at the top of that file before enabling anything at boot.
 4. **Write the tuned gains into real.yaml** and record why.
 5. **Friction feedforward** for the standstill hunting. Observed at TEST 3
    (2026-08-01): station keeping holds, but the robot rocks slightly back and

@@ -1,0 +1,42 @@
+[Unit]
+Description=BipedV1 CAN bus (CANable -> slcand -> can0)
+Documentation=file:///etc/default/biped
+Documentation=https://github.com/aidanpren/BipedV1/blob/main/deploy/README.md
+
+# Deliberately NOT ordered after a `dev-ttyACM0.device` unit. That would pin us
+# to an unstable device name, and the device unit for a by-id path is awkward to
+# name. biped-can-start.sh waits for the device itself (CAN_DEVICE_WAIT), which
+# is both more robust and easier to debug — the wait, and its failure, are
+# visible in the journal instead of being a dependency that never resolved.
+
+[Service]
+Type=exec
+EnvironmentFile=-/etc/default/biped
+
+# Clear any zombie daemon/netdev BEFORE starting. See biped-can-cleanup.sh for
+# why the order inside it matters.
+ExecStartPre=/usr/local/lib/biped/biped-can-cleanup.sh
+ExecStart=/usr/local/lib/biped/biped-can-start.sh
+ExecStartPost=/usr/local/lib/biped/biped-can-linkup.sh
+
+# Run cleanup on the way OUT as well as on the way in. slcand's -c (send close
+# on exit) only fires on a clean shutdown; SIGKILL, a crash, and a yanked USB
+# cable all bypass it and leave the netdev behind. Without this line the zombie
+# would be created on stop and only cleared on the NEXT start, which means
+# `systemctl stop` would leave the bus name squatted for anything else that
+# wanted it.
+ExecStopPost=/usr/local/lib/biped/biped-can-cleanup.sh
+
+Restart=on-failure
+RestartSec=2
+
+# Covers the CAN_DEVICE_WAIT poll (20 s default) plus slcand's own startup with
+# margin. If this expires the journal will show exactly which stage was waiting.
+TimeoutStartSec=45
+
+# slcand needs CAP_NET_ADMIN to create and rename the netdev, and write access
+# to the tty. Runs as root; the ROS stack does not (see biped-stack.service).
+User=root
+
+[Install]
+WantedBy=multi-user.target

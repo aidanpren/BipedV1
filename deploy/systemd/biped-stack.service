@@ -1,0 +1,82 @@
+# @BIPED_USER@ and @BIPED_WS@ are substituted by deploy/install.sh.
+# `User=` and `WorkingDirectory=` cannot read EnvironmentFile= values — systemd
+# resolves those directives before the environment file is loaded — so unlike
+# everything else they have to be literal in the installed unit.
+[Unit]
+Description=BipedV1 ROS 2 stack (real.launch.py)
+Documentation=https://github.com/aidanpren/BipedV1/blob/main/HANDOFF.md
+
+# ---------------------------------------------------------------------------
+# Wants=, NOT Requires=. If CAN failed to come up we still want this to start:
+# the dashboard, rosbridge, imu_node and the journal are how you find out WHY,
+# and a stack with no CAN is inert rather than dangerous because mode_manager
+# boots into DISABLED. Requires= would take the diagnostics down with the fault.
+# Change this one word if you would rather have all-or-nothing.
+#
+# And explicitly NOT BindsTo=. BindsTo would stop this unit whenever
+# biped-can.service stopped — meaning a momentary USB glitch on the CANable
+# would KILL THE RUNNING BALANCE LOOP and drop the robot. Losing CAN should
+# degrade to "the bridge complains", never to "the controller is gone".
+# ---------------------------------------------------------------------------
+Wants=biped-can.service
+After=biped-can.service
+
+# After= on biped-can.service means "after can0 is UP", not merely "after
+# slcand was launched" — because that unit's ExecStartPost brings the link up
+# and systemd holds a unit in `activating` until ExecStartPost returns.
+Wants=network-online.target
+After=network-online.target
+
+# Give up rather than crash-loop. Five failures inside a minute means the fault
+# is not transient, and an endless restart loop buries the first, real error
+# under thousands of identical ones.
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=exec
+EnvironmentFile=-/etc/default/biped
+
+# NOT root. Nothing in the ROS stack needs privilege: opening an AF_CAN socket
+# is unprivileged, and the netdev was already created by biped-can.service.
+User=@BIPED_USER@
+Group=@BIPED_USER@
+WorkingDirectory=@BIPED_WS@
+Environment=HOME=/home/@BIPED_USER@
+
+# input:   /dev/input/js* and event* for joy_node (the DS4 fallback pad plugged
+#          directly into the Pi, per CLAUDE.md goal 3).
+# dialout: the CANable's tty, in case you ever pin CAN_DEVICE and run slcand
+#          from a non-root context.
+SupplementaryGroups=input dialout
+
+# Python line-buffers to a terminal but BLOCK-buffers to a pipe, and systemd
+# gives it a pipe. Without this, node output sits in a 4 KB buffer and
+# `journalctl -fu biped-stack` shows nothing for minutes — which is
+# indistinguishable from a hung stack at exactly the moment you are trying to
+# tell those two apart.
+Environment=PYTHONUNBUFFERED=1
+
+# The journal is not a terminal; colour codes here are just noise in the log.
+Environment=RCUTILS_COLORIZED_OUTPUT=0
+
+ExecStart=/usr/local/lib/biped/biped-stack.sh
+
+# ---------------------------------------------------------------------------
+# Shutdown. `ros2 launch` installs a SIGINT handler that shuts its child nodes
+# down in order; on SIGTERM it is far less graceful. KillMode=mixed sends the
+# signal to the main process ONLY (so launch runs its own teardown), then
+# SIGKILLs anything still in the cgroup after the timeout — which is what
+# reaps stragglers like the dashboard's `python3 -m http.server`.
+# ---------------------------------------------------------------------------
+KillSignal=SIGINT
+KillMode=mixed
+TimeoutStopSec=15
+
+# on-failure, not always: a clean exit means someone ran `systemctl stop`, and
+# restarting then would fight the operator.
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

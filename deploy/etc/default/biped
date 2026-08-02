@@ -1,0 +1,64 @@
+# /etc/default/biped — configuration for the BipedV1 systemd units.
+# Installed by deploy/install.sh. Edit IN PLACE on the Pi; no rebuild needed.
+#
+# ---------------------------------------------------------------------------
+# FORMAT WARNING. This file is read TWO ways:
+#   1. by systemd, via `EnvironmentFile=` — systemd does NOT run a shell here.
+#      No command substitution, no $VAR expansion, no globs, no `export`.
+#   2. by the helper scripts in /usr/local/lib/biped, via `.` (source) — which
+#      IS a shell, and would happily expand things systemd ignores.
+# Anything clever would therefore mean two different values depending on who
+# read it. Keep every line a plain, literal KEY=value.
+# ---------------------------------------------------------------------------
+
+# --- where the code lives --------------------------------------------------
+# Must be the colcon workspace root — the directory containing install/setup.bash.
+BIPED_WS=/home/aidanpren/BipedV1
+
+# The ROS 2 underlay. Jazzy; see CLAUDE.md for why we are not on Lyrical Luth.
+ROS_DISTRO_SETUP=/opt/ros/jazzy/setup.bash
+
+# What to launch. Overridable so you can point the service at a smaller launch
+# file while debugging without editing the unit.
+BIPED_LAUNCH_PKG=robot_bringup
+BIPED_LAUNCH_FILE=real.launch.py
+# Extra `key:=value` launch arguments, space separated. Leave empty for normal
+# operation. Example for a bench run with no motors:
+#   BIPED_LAUNCH_ARGS=can_channel:=vcan0 imu_driver:=fake
+BIPED_LAUNCH_ARGS=
+
+# --- CAN --------------------------------------------------------------------
+# Interface name slcand renames the netdev to. real.yaml's odrive_bridge and
+# leg_controller both say can0; if you change it here, change it there too or
+# the nodes open an interface that does not exist.
+CAN_IFACE=can0
+
+# slcand's -s speed index. 6 = 500 kbps, which is what the ODrives are
+# configured for (see HARDWARE_BRINGUP.md). This is an INDEX, not a bitrate:
+# s0=10k s1=20k s2=50k s3=100k s4=125k s5=250k s6=500k s7=800k s8=1M.
+CAN_SPEED_INDEX=6
+
+# Which serial device the CANable is. LEAVE EMPTY for auto-detection, which is
+# the recommended setting: biped-can-start.sh resolves it through
+# /dev/serial/by-id/, a path keyed on the USB descriptor and serial number, so
+# it survives the re-enumeration that moves /dev/ttyACM0 to /dev/ttyACM1.
+# Set it explicitly ONLY if you end up with more than one CDC-ACM device on the
+# Pi and auto-detection reports an ambiguity. Prefer a by-id path even then:
+#   CAN_DEVICE=/dev/serial/by-id/usb-CANable-if00
+CAN_DEVICE=
+
+# Seconds to wait at boot for that device to appear. USB enumeration is not
+# instant and systemd starts units eagerly, so without this the service would
+# lose a race it could simply have waited out.
+CAN_DEVICE_WAIT=20
+
+# --- ROS networking ---------------------------------------------------------
+# Must match the laptop driver station, or DDS discovery silently finds nothing
+# and the dashboard sits at "closed" with no error anywhere.
+ROS_DOMAIN_ID=0
+
+# Jazzy's replacement for the deprecated ROS_LOCALHOST_ONLY. SUBNET = discover
+# peers on the LAN, which is exactly what CLAUDE.md goal 2 (optional driver
+# station) needs. LOCALHOST here would make the robot invisible to the laptop
+# and to a phone on the hotspot.
+ROS_AUTOMATIC_DISCOVERY_RANGE=SUBNET
