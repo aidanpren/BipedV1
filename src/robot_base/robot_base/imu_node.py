@@ -22,6 +22,7 @@ hardware I2C handles poorly. Prefer driver:=uart or driver:=spi on the Pi.
 import math
 import signal
 import time
+import traceback
 
 import rclpy
 from sensor_msgs.msg import Imu
@@ -76,8 +77,12 @@ class _InitTimeout(Exception):
 
 
 def _init_alarm(signum, frame):
+    # `frame` is where the main thread was when the alarm landed — i.e. the
+    # exact line the hung handshake is stuck on. Put it in the message so the
+    # journal shows WHERE, not just THAT.
+    stuck_at = ''.join(traceback.format_stack(frame, limit=6))
     raise _InitTimeout('driver construction exceeded the timeout — the SHTP '
-                       'handshake never completed')
+                       f'handshake never completed. Stuck at:\n{stuck_at}')
 
 
 class FakeDriver:
