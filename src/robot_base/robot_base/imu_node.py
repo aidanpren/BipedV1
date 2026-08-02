@@ -20,6 +20,7 @@ Hardware note: the BNO08x uses I2C clock stretching, which the Raspberry Pi's
 hardware I2C handles poorly. Prefer driver:=uart or driver:=spi on the Pi.
 """
 import math
+import signal
 import time
 
 import rclpy
@@ -68,6 +69,15 @@ def quat_rotate(q, v):
         vy + w * ty + (z * tx - x * tz),
         vz + w * tz + (x * ty - y * tx),
     )
+
+
+class _InitTimeout(Exception):
+    pass
+
+
+def _init_alarm(signum, frame):
+    raise _InitTimeout('driver construction exceeded the timeout — the SHTP '
+                       'handshake never completed')
 
 
 class FakeDriver:
@@ -159,9 +169,43 @@ class ImuNode:
             self.driver = FakeDriver()
             self.node.get_logger().warn('using FAKE IMU data — synthetic motion')
         else:
-            self.driver = BNO08xDriver(self.node, kind, p('port'), p('baud'),
-                                       p('i2c_address'))
-            self.node.get_logger().info(f'BNO085 up on {kind}')
+            # HARDENED 2026-08-02 after the first standalone boot. The BNO08x
+            # SHTP handshake over the Pi's clock-stretch-hostile I2C fails
+            # PROBABILISTICALLY, and the Adafruit driver's failure mode is to
+            # poll forever — so this node used to hang RIGHT HERE, before
+            # rclpy.spin(), where no timer (liveness check included) can ever
+            # fire. Result: robot in TELEOP, deaf, journal EMPTY. The one
+            # failure this node could not report was the one that happened.
+            #
+            # Probed on hardware the same night: the identical construction
+            # succeeds in ~1.5 s on a free bus. So supervise it: a hard alarm
+            # per attempt, log LOUDLY, retry forever. The rest of the stack is
+            # already up and safe (mode_manager boots DISABLED), and the
+            # journal now shows exactly what is wrong while it retries.
+            #
+            # signal.alarm only works in the MAIN thread — true here because
+            # __init__ runs before spin(). Do not move this into a timer
+            # callback without rethinking that.
+            signal.signal(signal.SIGALRM, _init_alarm)
+            attempt = 0
+            while True:
+                attempt += 1
+                try:
+                    signal.alarm(10)
+                    self.driver = BNO08xDriver(self.node, kind, p('port'),
+                                               p('baud'), p('i2c_address'))
+                    signal.alarm(0)
+                    break
+                except Exception as exc:
+                    signal.alarm(0)
+                    self.node.get_logger().error(
+                        f'BNO085 init attempt {attempt} failed '
+                        f'({type(exc).__name__}: {exc}); retrying in 2 s. '
+                        'If this repeats indefinitely, POWER-CYCLE the robot '
+                        '— a warm reboot does not reset the sensor.')
+                    time.sleep(2.0)
+            self.node.get_logger().info(f'BNO085 up on {kind} '
+                                        f'(attempt {attempt})')
         self.kind = kind
 
         if self.identity_mount:
