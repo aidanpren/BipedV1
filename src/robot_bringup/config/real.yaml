@@ -37,8 +37,16 @@ balance_controller:
     # Halving a2 halves the driving bandwidth to 1.5 rad/s (inside the
     # ceiling) and dropping a1 with it leaves station keeping better damped
     # AND twice as quick to return. There was never a trade-off here.
+    # 2026-08-02: a2 -0.15 -> -0.18 on hardware. Raises zeta 0.89 -> 1.07 to
+    # damp the +-0.25 m station-keeping limit cycle. -0.20 is the ceiling.
+    # 2026-08-02 (later): that "limit cycle" turned out to be a ~0.5 Nm
+    # friction DEAD ZONE (measured — see odrive_bridge's friction block), so
+    # -0.18 was damping tuned against a ghost. With friction compensated,
+    # -0.12 (zeta 0.71, lightly underdamped) station-keeps without the rock
+    # and recovers faster. If a2 ever needs retuning, do it WITH friction
+    # comp active, or it lands back at the wrong value.
     a1: -0.07
-    a2: -0.15
+    a2: -0.12
 
     k_yaw: 4.0
     max_lean: 0.3
@@ -58,7 +66,9 @@ balance_controller:
     # steering feels mushy. This is the knob to reach for BEFORE raising
     # scale_angular.yaw, because it changes how abruptly the turn is
     # requested, not how sharp the turn ultimately is.
-    yaw_accel_limit: 2.0      # rad/s^2
+    # 2026-08-02: 2.0 felt mushy on hardware -> 5.0. Slew is now
+    # k_yaw * 5.0 * dt = 0.2 Nm/tick, full-stick ramp 0.15 s.
+    yaw_accel_limit: 5.0      # rad/s^2
 
     # ── reference shaping (added 2026-08-01) ───────────────────────────────
     # Ramp rate for v_cmd. RAISED 0.3 -> 0.45 on 2026-08-01 alongside the 50%
@@ -72,7 +82,8 @@ balance_controller:
     # torque, so without this the step just moves from v to a. Offline sim:
     # peak torque slew 0.663 Nm/tick without, 0.074 Nm/tick with.
     # RAISE for a softer, lazier throttle; lower for a crisper one.
-    jerk_tau: 0.15            # s
+    # 2026-08-02: 0.15 -> 0.3 on hardware; the softer throttle drove better.
+    jerk_tau: 0.3             # s
 
     # 1/g. Holding a lean theta accelerates the robot at a = g*tan(theta) ~
     # g*theta, so the lean needed for a commanded acceleration is a/9.81.
@@ -88,7 +99,14 @@ balance_controller:
     # Anti-windup: how far the reference position may lead the robot. Every
     # centimetre past this is distance the robot would sprint to recover after
     # being blocked or held.
-    max_pos_error: 0.25       # m
+    # 2026-08-02: 0.25 -> 0.5 on hardware. At 0.25 `err` sat PINNED at the rail
+    # during station keeping, which froze the position term at a1*0.25 = 0.0175
+    # rad -- about 1 deg of restoring lean out of the 17 deg max_lean allows --
+    # and then dragged x_home along behind the drifting robot. Note that at
+    # v_cmd = 0 there is no windup to prevent anyway: x_home does not move on
+    # its own, so the clamp only ever pulled home toward a robot that was
+    # already leaving. Revisit if a blocked-then-released robot sprints.
+    max_pos_error: 0.5        # m
 
     # Wheel-velocity low-pass, as a TIME CONSTANT (see balance_controller).
     # The old hardcoded 0.85/0.15 was 123 ms at the 50 Hz odrive_bridge
@@ -117,7 +135,16 @@ balance_controller:
     # a constant disturbance into a constant ERROR rather than removing it.
     # Leaving this at 0.0 makes the robot station-keep at an offset of
     # pitch_trim/a1 = 0.05/-0.05 = ONE METRE from home, permanently.
-    pitch_trim: 0.08
+    # MEASURED 2026-08-02 by the bracketing method above: 0.08 drifted BACKWARD
+    # (err mean -0.196), 0.094 drifted FORWARD (+0.090), 0.090 centred it
+    # (+0.021). Then the leg bolts were found LOOSE and tightened, which moved
+    # the CoM and the trim with it: 0.090 -> 0.06. Re-measure after ANY
+    # mechanical work on the legs -- this value tracks the chassis, not the
+    # controller, and every trim reading taken before that fix was against a
+    # chassis that was quietly changing shape.
+    # 2026-08-02 (later): 0.06 -> 0.057 with friction comp live — a
+    # compensated dead zone stops masking the last sliver of trim error.
+    pitch_trim: 0.057
 
     # MEASURED on hardware 2026-07-31:
     #     odrv0.axis0.motor.config.torque_constant = 0.43 Nm/A  (motor shaft)
@@ -228,9 +255,22 @@ odrive_bridge:
     # SAFETY: exactly [0.0, 0.0] from balance_controller passes through
     # uncompensated, so DISABLED stays truly silent no matter what these are
     # set to. Do not remove that branch in odrive_bridge.
-    friction_ff: 0.0          # Nm at the wheel; Coulomb FF, for DRIVING
-    friction_v_eps: 0.2       # rad/s; taper width through zero
-    dither_torque: 0.0        # Nm at the wheel; for STANDSTILL
+    # MEASURED 2026-08-02 with tools/analyze_rock.py on three station-keep
+    # bags (figures in rock_analysis/): breakaway is ~0.5 Nm common-mode at
+    # the wheel — commanded torque square-waved at +-0.3-0.5 Nm producing ZERO
+    # wheel accel (the cross-plot lobes), wheels dwelt motionless 8% of the
+    # time vs 1.5% for a clean oscillation. The slow ~12 s / +-0.19 m
+    # station-keep rock WAS this dead zone limit-cycling the outer loop:
+    # 0.5 Nm / k3 = 1.4 deg of dead band predicts +-0.21 m, matching. The old
+    # timid values (ff 0.1, dither 0.15) were 3-5x below breakaway, which is
+    # why the rock looked immune to friction compensation.
+    friction_ff: 0.35         # Nm at the wheel; 70% of measured breakaway,
+                              # per the never-exceed-it rule above
+    friction_v_eps: 0.3       # rad/s; taper width through zero
+    dither_torque: 0.25       # Nm at the wheel; for STANDSTILL
+                              # 0.15 was timid vs 0.5 breakaway; 0.4 visibly
+                              # shakes the frame. 0.25 with ff carrying the
+                              # moving regime is the 2026-08-02 sweet spot.
     dither_hz: 25.0           # Hz; do NOT raise toward 50 -- see dither()
 
 leg_controller:

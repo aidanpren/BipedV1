@@ -17,9 +17,9 @@ teleop_twist_joy_node:
     # accel_limit was raised to match (0.3 -> 0.45 m/s^2 in real.yaml), so
     # full-stick ramp time is unchanged at 0.225/0.45 = 0.5 s.
     scale_linear:
-      x: 0.225
+      x: 0.5
     scale_linear_turbo:
-      x: 0.45
+      x: 0.75
     axis_angular:
       yaw: 0
     # YAW IS RATE-LIMITED as of 2026-08-02 (it was not, before). This value is
