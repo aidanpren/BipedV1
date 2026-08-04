@@ -58,9 +58,12 @@ real risk. Fallback if it bites: port the by-then-proven loop to Pico firmware.
    is the ONLY thing that drives the robot. The intended sequence is: turn on
    the robot, turn on the pad, press a button to switch to TELEOP, drive.
    twist_mux arbitrates teleop vs autonomous by priority + timeout.
-4. **Dashboard**: see robot state, battery voltage, current draw; change modes.
-   OPTIONAL and read-mostly — a convenience for switching modes and watching
-   readouts. **It does not drive the robot.** No on-screen sticks.
+4. **Dashboard**: see robot state, battery voltage, per-motor current; change
+   modes; tune live; pull/build/restart the code. OPTIONAL — the robot runs
+   with nothing connected. **It does not drive the robot.** No on-screen
+   sticks; the PS4 pad is still the only thing that moves it.
+   Drag-and-drop tiles on a 12-column grid, arranged per browser. See
+   `src/robot_dashboard/README.md`.
 5. **Maintainable**: easy to add to, change, and navigate. Features are added
    by adding NODES, not editing a monolith. Every tunable is a YAML param,
    never hardcoded.
@@ -85,7 +88,8 @@ src/. Build from the root with colcon; never commit build/, install/, or log/.
                       (sim.launch.py / real.launch.py — identical SHARED block)
 - robot_description — URDF/xacro + Gazebo worlds
 - robot_teleop      — joy, twist_mux, mode_manager
-- robot_base        — balance_controller, odrive_bridge, imu_node, odrive_can
+- robot_base        — balance_controller, odrive_bridge, imu_node, odrive_can,
+                      odrive_telemetry (read-only amps/volts; RTR reads only)
 - robot_interfaces  — custom msgs/srvs (SetMode)
 - robot_dashboard   — rosbridge + web dashboard (browser/phone)
 - robot_navigation  — Nav2/SLAM (later)

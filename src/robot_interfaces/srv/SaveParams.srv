@@ -1,0 +1,26 @@
+# Persist LIVE parameter values back into the YAML files on disk.
+#
+# The problem it solves: `ros2 param set` (and the dashboard's tuning sliders,
+# which are the same call) change a running node and nothing else. Reboot the
+# robot and a tuning session evaporates. This service snapshots what the node
+# is ACTUALLY running right now and writes those numbers into the config file.
+#
+# It reads from the LIVE NODE, not from whatever the dashboard thinks it sent.
+# If a set_parameters call was rejected, or a node clamped a value, the file
+# gets the value the robot is really using — the running robot is the source of
+# truth, never the UI.
+
+# Node names to snapshot, WITHOUT a leading slash: ['balance_controller'].
+# Empty means every node the backend has a config file mapping for.
+string[] nodes
+
+# Dry run: work out the diff and report it, write nothing. Use it to see what
+# a Save would do before committing to it.
+bool preview
+---
+bool success
+string message
+
+# One line per value written, as 'node.param: old -> new'. On a preview this is
+# what WOULD be written. Empty means nothing had drifted from the file.
+string[] changed

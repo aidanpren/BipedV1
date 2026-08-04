@@ -12,6 +12,9 @@
   <!-- generates the language bindings (Python/C++) for the .srv/.msg files -->
   <buildtool_depend>rosidl_default_generators</buildtool_depend>
   <exec_depend>rosidl_default_runtime</exec_depend>
+  <!-- MotorTelemetry has a std_msgs/Header field. Needed at BUILD time for the
+       generator and at RUN time for anyone deserialising the message. -->
+  <depend>std_msgs</depend>
   <member_of_group>rosidl_interface_packages</member_of_group>
 
   <test_depend>ament_lint_auto</test_depend>

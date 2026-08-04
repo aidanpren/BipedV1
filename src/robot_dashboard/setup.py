@@ -14,9 +14,18 @@ setup(
             ['resource/' + package_name]),
         ('share/' + package_name, ['package.xml']),
         (os.path.join('share', package_name, 'launch'), glob('launch/*.launch.py')),
-        # the web assets (index.html + vendored roslib.min.js) get installed so
-        # the static server can serve them from the install space.
-        (os.path.join('share', package_name, 'web'), glob('web/*')),
+        # The web assets get installed so the static server can serve them from
+        # the install space.
+        #
+        # NOTE the three separate entries: glob() does NOT recurse, and
+        # data_files has no notion of a directory tree. A single 'web/*' line
+        # installs index.html and silently drops css/ and js/ — the page then
+        # loads, renders an unstyled top bar, and does nothing else, with no
+        # error anywhere in the ROS logs. Every new subdirectory under web/
+        # needs its own line here.
+        (os.path.join('share', package_name, 'web'), glob('web/*.html') + glob('web/*.js')),
+        (os.path.join('share', package_name, 'web', 'css'), glob('web/css/*.css')),
+        (os.path.join('share', package_name, 'web', 'js'), glob('web/js/*.js')),
     ],
     install_requires=['setuptools'],
     zip_safe=True,
@@ -31,6 +40,7 @@ setup(
     },
     entry_points={
         'console_scripts': [
+            'dashboard_backend = robot_dashboard.dashboard_backend:main',
         ],
     },
 )

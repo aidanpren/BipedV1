@@ -15,6 +15,12 @@ here so there is exactly one place to get them right.
 import struct
 
 # ── command frames (host -> ODrive) ───────────────────────────────────────────
+# 0x001 is the one frame nobody asks for: the ODrive BROADCASTS it on a timer,
+# roughly 10 Hz, with no request. That is what makes it the honest liveness
+# signal — a silent node is genuinely absent, whereas a missing RTR reply only
+# means one frame went astray. It is also how the node IDs were confirmed on
+# hardware 2026-07-29 (`candump can0` showing 001/021/041/061).
+CMD_HEARTBEAT             = 0x001
 CMD_SET_AXIS_STATE        = 0x007
 CMD_GET_ENCODER_ESTIMATES = 0x009
 CMD_SET_CONTROLLER_MODES  = 0x00B
@@ -120,6 +126,16 @@ class ODriveClient:
             return None
         cmd = msg.arbitration_id & 0x1F
         d = bytes(msg.data)
+        if cmd == CMD_HEARTBEAT and len(d) >= 5:
+            # DECODED DEFENSIVELY, on purpose. The first five bytes are stable
+            # across ODrive firmware generations — uint32 axis_error then uint8
+            # axis_state — but bytes 5-7 are NOT: 0.5.x packs three separate
+            # error flags there, 0.6.x packs procedure_result and
+            # trajectory_done. These motors run a vendor FORK of 0.5.13+, so
+            # reading past byte 4 would be guessing at a layout nobody has
+            # confirmed. Take the two fields that are certain and stop.
+            axis_error, axis_state = struct.unpack('<IB', d[:5])
+            return ('heartbeat', (axis_error, axis_state))
         if cmd == CMD_GET_ENCODER_ESTIMATES and len(d) >= 8:
             pos, vel = struct.unpack('<ff', d[:8])
             return ('encoder', (pos / self.gear, vel / self.gear))

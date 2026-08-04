@@ -97,6 +97,19 @@ def generate_launch_description():
         parameters=[params,
                     {'driver': LaunchConfiguration('imu_driver')}],
     )
+    # READ-ONLY electrical telemetry: per-motor amps, bus volts, axis faults.
+    # A third socket on the same CAN interface, which SocketCAN is fine with —
+    # the kernel copies received frames to every open socket, so this neither
+    # steals frames from odrive_bridge nor needs to coordinate with it.
+    #
+    # Outside the balance loop on purpose: if it dies the robot balances
+    # exactly as before. It also sends nothing but RTR read requests, so there
+    # is no code path in it that can energise a motor. See the node's header.
+    telemetry = Node(
+        package='robot_base', executable='odrive_telemetry', output='screen',
+        parameters=[params,
+                    {'can_channel': LaunchConfiguration('can_channel')}],
+    )
     # leg ODrives in POSITION mode. Shares the CAN bus with odrive_bridge —
     # SocketCAN gives each node its own socket on the same interface.
     # OFF by default; see the `legs` argument above for why.
@@ -126,13 +139,18 @@ def generate_launch_description():
             get_package_share_directory('robot_teleop'),
             'launch', 'teleop.launch.py')),
         launch_arguments={'legs': LaunchConfiguration('legs')}.items())
+    # `dashboard_params` is passed EXPLICITLY for the same reason `legs` is
+    # below: a parent's launch configurations DO leak into an include, so
+    # relying on that leak would be the rosbridge-port bug wearing a new hat.
+    # Passing it makes the coupling visible in the file you would actually read.
     dashboard = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(os.path.join(
             get_package_share_directory('robot_dashboard'),
-            'launch', 'dashboard.launch.py')))
+            'launch', 'dashboard.launch.py')),
+        launch_arguments={'dashboard_params': params}.items())
 
     return LaunchDescription([
         can_channel, imu_driver, legs,
-        odrive, imu, leg_controller,
+        odrive, imu, telemetry, leg_controller,
         balance, mode_manager, teleop, dashboard,
     ])

@@ -71,6 +71,7 @@ means the legs COLLAPSE** (position mode, see the `leg-position-hold` notes).
 deploy/
 ├── install.sh                  run ON THE PI with sudo; idempotent
 ├── etc/default/biped           config template -> /etc/default/biped
+├── etc/sudoers.d/biped-dashboard   -> /etc/sudoers.d/  (templated)
 ├── systemd/
 │   ├── biped-can.service       -> /etc/systemd/system/
 │   ├── biped-stack.service     -> /etc/systemd/system/  (templated)
@@ -103,6 +104,31 @@ sudo ~/BipedV1/deploy/install.sh
 Install-only by default — it does not enable anything, so running it changes
 nothing about your next boot. Re-run it after every pull; it will not clobber
 an edited `/etc/default/biped`.
+
+### The sudoers drop-in (added 2026-08-03)
+
+`install.sh` also writes `/etc/sudoers.d/biped-dashboard`, which lets the stack
+user run `systemctl restart biped-stack.service` without a password. That one
+line is what makes the dashboard's **Restart** button work; nothing else in the
+stack needs it.
+
+It is validated with `visudo -cf` into a temp file *before* being installed. A
+syntax error anywhere under `/etc/sudoers.d` makes `sudo` refuse to run at all —
+including the `sudo` you would need to delete the broken file — so on a headless
+Pi an unchecked write here is a reinstall. If validation fails, install.sh warns
+and skips it: the Restart button then fails with a sudo error and everything
+else keeps working.
+
+**It grants five literal command lines and no wildcards.** That is deliberate
+and worth understanding: rosbridge binds `0.0.0.0` with **no authentication**,
+because that is what lets a phone connect. So the dashboard's WebSocket is
+effectively open to whatever network the Pi is on, and this file decides what
+"open" is allowed to do. `NOPASSWD: ALL` would turn a dashboard into
+unauthenticated root. A wildcard like `systemctl restart *` would look
+equivalent and would permit restarting *any* unit on the system.
+
+Treat the Pi's network accordingly: the AP has a passphrase, and the dashboard
+is not something to expose to an untrusted LAN.
 
 ---
 

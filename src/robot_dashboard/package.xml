@@ -9,8 +9,15 @@
 
   <!-- the WebSocket bridge the page talks to -->
   <exec_depend>rosbridge_server</exec_depend>
-  <!-- the dashboard calls this service -->
+  <!-- SetMode (called by the page) and SaveParams (served by the backend) -->
   <exec_depend>robot_interfaces</exec_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <!-- rosapi_node ships inside rosbridge_server and is what lets the page
+       enumerate topics and message fields at runtime, which is how the
+       generic tiles work without a hardcoded topic list. -->
+  <exec_depend>rosbridge_server</exec_depend>
 
   <test_depend>ament_copyright</test_depend>
   <test_depend>ament_flake8</test_depend>

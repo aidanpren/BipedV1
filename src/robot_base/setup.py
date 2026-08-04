@@ -26,6 +26,7 @@ setup(
         'console_scripts': [
             'balance_controller = robot_base.balance_controller:main',
             'odrive_bridge = robot_base.odrive_bridge:main',
+            'odrive_telemetry = robot_base.odrive_telemetry:main',
             'imu_node = robot_base.imu_node:main',
             'leg_controller = robot_base.leg_controller:main'
         ],

@@ -34,8 +34,8 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 from robot_base.odrive_can import (
     CMD_GET_BUS_VI, CMD_GET_ENCODER_ESTIMATES, CMD_GET_IQ, CMD_GET_TORQUES,
-    CMD_SET_AXIS_STATE, CMD_SET_CONTROLLER_MODES, CMD_SET_INPUT_POS,
-    CMD_SET_INPUT_TORQUE, CMD_SET_INPUT_VEL, CMD_SET_LIMITS,
+    CMD_HEARTBEAT, CMD_SET_AXIS_STATE, CMD_SET_CONTROLLER_MODES,
+    CMD_SET_INPUT_POS, CMD_SET_INPUT_TORQUE, CMD_SET_INPUT_VEL, CMD_SET_LIMITS,
     AxisState, ControlMode, arb_id, torque_constant,
 )
 
@@ -46,6 +46,11 @@ INERTIA = 0.0015        # kg*m^2, motor shaft
 VISCOUS = 0.0008        # Nm per rad/s
 COULOMB = 0.010         # Nm, constant friction
 BUS_VOLTAGE = 24.0
+# Quiescent draw per axis: gate drivers, encoder, MCU. Small, but not zero, and
+# modelling it is what makes a powered-and-idle axis look different from an
+# absent one on the dashboard's Power tile.
+IDLE_CURRENT = 0.12     # A
+HEARTBEAT_HZ = 10.0     # real ODrives broadcast at roughly this rate
 
 
 class FakeODrive:
@@ -55,6 +60,7 @@ class FakeODrive:
         self.vel_limit_guard = vel_limit_guard
 
         self.axis_state = AxisState.IDLE
+        self.axis_error = 0          # set via --fault to exercise fault display
         self.control_mode = ControlMode.VELOCITY
         self.input_mode = 1
         self.vel_setpoint = 0.0      # motor turns/s
@@ -147,7 +153,11 @@ class FakeODrive:
                 return struct.pack('<ff', iq, iq)
             if cmd == CMD_GET_BUS_VI:
                 mech_w = abs(self.applied_torque * self.vel * 2 * math.pi)
-                return struct.pack('<ff', BUS_VOLTAGE, mech_w / BUS_VOLTAGE)
+                # Mechanical power plus a quiescent draw, so the Power tile
+                # shows a plausible non-zero pack current on a stationary robot
+                # rather than a suspicious flat 0.00 A.
+                return struct.pack('<ff', BUS_VOLTAGE,
+                                   mech_w / BUS_VOLTAGE + IDLE_CURRENT)
             if cmd == CMD_GET_TORQUES:
                 return struct.pack('<ff', self.torque_setpoint, self.applied_torque)
         return None
@@ -185,10 +195,23 @@ class FakeODrive:
                 self._torque_ff = tq_ff * 0.001
 
     # ── loops ─────────────────────────────────────────────────────────────────
+    def heartbeat(self):
+        """The one frame a real ODrive sends without being asked.
+
+        Modelled because the dashboard's `online` indicator is driven by it, not
+        by whether a read got an answer — and an indicator that has never been
+        seen to go false is an indicator nobody should trust. Layout matches
+        odrive_can.decode: uint32 axis_error, uint8 axis_state, then bytes
+        whose meaning differs between firmware generations and which nothing
+        here reads.
+        """
+        return struct.pack('<IBBBB', self.axis_error, self.axis_state, 0, 0, 0)
+
     def run(self, cyclic_ms=0):
         """Blocking. cyclic_ms > 0 also broadcasts feedback (fw 0.6.x style)."""
         last = time.time()
         next_cyclic = last
+        next_heartbeat = last
         while self.running:
             msg = self.bus.recv(timeout=0.005)
             if msg:
@@ -198,6 +221,9 @@ class FakeODrive:
             if dt >= 0.002:
                 self.step(dt)
                 last = now
+            if now >= next_heartbeat:
+                self._reply(CMD_HEARTBEAT, self.heartbeat())
+                next_heartbeat = now + 1.0 / HEARTBEAT_HZ
             if cyclic_ms and now >= next_cyclic:
                 for c in (CMD_GET_ENCODER_ESTIMATES, CMD_GET_IQ):
                     self._reply(c, self.feedback_frame(c))
@@ -220,11 +246,15 @@ def main():
                     help='position-loop damping (Nm per turn/s of error)')
     ap.add_argument('--vel-integrator-gain', type=float, default=None,
                     help='>0 removes steady-state sag under load')
+    ap.add_argument('--fault', type=lambda s: int(s, 0), default=0,
+                    help='report this axis_error in the heartbeat (e.g. 0x40) '
+                         'to check that a fault actually shows up on screen')
     a = ap.parse_args()
 
     bus = can.interface.Bus(interface=a.interface, channel=a.channel, bitrate=500000)
     drv = FakeODrive(bus, node_id=a.node_id, vel_limit_guard=not a.no_vel_limit)
     drv.load_torque = a.load_torque
+    drv.axis_error = a.fault
     if a.vel_gain is not None:
         drv.vel_gain = a.vel_gain
     if a.vel_integrator_gain is not None:

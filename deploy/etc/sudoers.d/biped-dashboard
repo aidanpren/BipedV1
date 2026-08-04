@@ -1,0 +1,31 @@
+# Lets dashboard_backend restart the ROS stack without a password.
+#
+# Installed to /etc/sudoers.d/biped-dashboard by deploy/install.sh, with
+# @BIPED_USER@ substituted. Only needed for the Deploy tile's Restart button —
+# git pull and colcon build run as the ordinary user and need nothing here.
+#
+# ---------------------------------------------------------------------------
+# WHY THIS IS NARROW, AND WHY THAT MATTERS MORE THAN IT LOOKS
+#
+# The obvious version of this file is `biped ALL=(root) NOPASSWD: ALL`, and it
+# would work. It would also mean anything that can reach the dashboard's
+# WebSocket has unauthenticated root on the robot — and rosbridge binds
+# 0.0.0.0 with no authentication at all, because that is what lets a phone
+# connect. So the WebSocket is effectively public on whatever network the Pi
+# joins, and this file decides what "public" gets to do.
+#
+# Listed here, it gets: restart, stop and query ONE named unit. Nothing else.
+#
+# NOTE THE ABSENCE OF WILDCARDS. `systemctl restart *` would look equivalent
+# and is not: the argument is unconstrained, so `systemctl restart` of any unit
+# on the system would be permitted — including units that run arbitrary
+# commands. Full literal command lines only.
+# ---------------------------------------------------------------------------
+Cmnd_Alias BIPED_STACK = \
+    /usr/bin/systemctl --no-block restart biped-stack.service, \
+    /usr/bin/systemctl restart biped-stack.service, \
+    /usr/bin/systemctl stop biped-stack.service, \
+    /usr/bin/systemctl is-active biped-stack.service, \
+    /usr/bin/systemctl status biped-stack.service
+
+@BIPED_USER@ ALL=(root) NOPASSWD: BIPED_STACK

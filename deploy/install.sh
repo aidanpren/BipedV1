@@ -156,6 +156,24 @@ if grep -q '@BIPED_' "${UNITDIR}/biped-stack.service"; then
     exit 1
 fi
 
+# --- sudoers drop-in for the dashboard's Restart button ---------------------
+# VALIDATED BEFORE IT IS INSTALLED, into a temp file first. A syntax error
+# anywhere in /etc/sudoers.d makes sudo refuse to run AT ALL — including the
+# sudo you would need to delete the broken file. On a headless Pi that is a
+# reinstall. visudo -cf is the check that makes this safe to automate.
+SUDOERS=/etc/sudoers.d/biped-dashboard
+tmp_sudoers="$(mktemp)"
+sed "s|@BIPED_USER@|${BIPED_USER}|g" "${HERE}/etc/sudoers.d/biped-dashboard" > "${tmp_sudoers}"
+if visudo -cf "${tmp_sudoers}" >/dev/null; then
+    install -m 0440 "${tmp_sudoers}" "${SUDOERS}"
+    echo "  installed ${SUDOERS}  (${BIPED_USER} may restart biped-stack)"
+else
+    echo "WARNING: generated sudoers file failed validation; NOT installed." >&2
+    echo "         The dashboard's Restart button will fail with a sudo error;" >&2
+    echo "         everything else still works. Fix and re-run." >&2
+fi
+rm -f "${tmp_sudoers}"
+
 systemctl daemon-reload
 echo "  systemctl daemon-reload"
 

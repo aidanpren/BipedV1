@@ -273,6 +273,94 @@ odrive_bridge:
                               # moving regime is the 2026-08-02 sweet spot.
     dither_hz: 25.0           # Hz; do NOT raise toward 50 -- see dither()
 
+odrive_telemetry:
+  ros__parameters:
+    # ── READ-ONLY electrical telemetry (added 2026-08-03) ──────────────────
+    # Fixes the dashboard's "Battery / Current / Source: needs Pico" stubs,
+    # which were never true: every ODrive already measures the DC bus it is
+    # powered from, and Get_Bus_Voltage_Current (0x017) hands it over for the
+    # cost of one CAN frame. There is no separate battery sensor and there does
+    # not need to be.
+    #
+    # This node NEVER TRANSMITS A COMMAND. It sends RTR read requests and
+    # listens to the heartbeats the ODrives broadcast anyway. Check it yourself:
+    # every bus.send in odrive_telemetry.py goes through client.request().
+    can_interface: 'socketcan'
+    can_channel: 'can0'
+    bitrate: 500000
+
+    # PARALLEL ARRAYS — entry i of one goes with entry i of the other, and the
+    # node refuses to start if the lengths disagree. Node IDs confirmed on
+    # hardware 2026-07-29 via candump (heartbeats 001/021/041/061).
+    # The hips are listed even though leg_controller is not launched: nothing
+    # else watches them, and "is the hip drawing current while idle?" is
+    # exactly the question this node exists to answer.
+    axis_names: ['right_wheel', 'right_hip', 'left_wheel', 'left_hip']
+    axis_node_ids: [0, 1, 2, 3]
+
+    # MEASURED on hardware 2026-07-31 (odrv0.axis0.motor.config.torque_constant).
+    # The one number converting the amps read here into the newton-metres the
+    # rest of the stack speaks. Wrong here = every torque readout wrong by a
+    # constant factor, while looking entirely plausible.
+    torque_constant: 0.43     # Nm per motor amp
+    gear_ratio: 8.0
+
+    # 5 Hz = 16 frames/s against odrive_bridge's ~200. The bus belongs to the
+    # balance loop first. Raise it temporarily to hunt a current spike; put it
+    # back afterwards.
+    publish_rate: 5.0         # Hz
+
+    # Ten missed heartbeats. Long enough that bus contention never trips it,
+    # short enough to notice a motor losing power while you watch the screen.
+    offline_timeout: 1.0      # s
+
+dashboard_backend:
+  ros__parameters:
+    # ── the filesystem/shell half of the dashboard (added 2026-08-03) ──────
+    # Serves the Deploy tile (git pull / colcon build / restart the stack) and
+    # the Save tile (write live tuning back into THIS file). A web page has
+    # neither a shell nor a filesystem; this node is where both live.
+
+    # EMPTY MEANS AUTO-DISCOVER, and auto is right on both machines: the node
+    # honours $BIPED_WS (which /etc/default/biped sets on the Pi) and otherwise
+    # walks up from its own realpath looking for a directory holding both src/
+    # and .git. Set it only if you have moved the workspace somewhere unusual.
+    workspace: ''
+
+    # The files Save is allowed to rewrite. This is also the ALLOWLIST — a node
+    # whose parameters are not in one of these files cannot be saved, so a
+    # stray service call cannot reach anything else on the Pi. Paths are
+    # relative to the workspace.
+    #
+    # NOTE the second entry is a SHARE-loaded file (see the
+    # params-share-vs-source-yaml note): editing it needs a colcon build before
+    # a restart picks it up, whereas this file is loaded from source. Saving to
+    # it still does the right thing — the values are already live in the node —
+    # but the change only survives a restart after a build.
+    config_files:
+      - 'src/robot_bringup/config/real.yaml'
+      - 'src/robot_teleop/config/teleop_twist_joy.yaml'
+
+    stack_service: 'biped-stack.service'
+    git_remote: 'origin'
+    git_branch: ''            # empty = whatever branch is checked out
+    build_args: ['--symlink-install']
+
+    # SAFETY GATE. Build and restart both kill balance_controller and idle the
+    # wheel axes, which on a balancing robot is not a restart — it is dropping
+    # it from standing height, from a button on a phone. With this true they
+    # refuse unless /mode says disabled, and an UNKNOWN mode counts as unsafe
+    # (no /mode means mode_manager is not running, which is the worst possible
+    # moment to guess).
+    #
+    # SET FALSE ONLY for bench work with the motors unpowered. `git pull` is
+    # never gated — it rewrites files, and the running nodes already hold their
+    # code in memory.
+    require_disabled: true
+
+    pull_timeout: 180.0       # s
+    build_timeout: 1800.0     # s; a cold full build of this workspace is slow
+
 leg_controller:
   ros__parameters:
     # ─────────────────────────────────────────────────────────────────────────
